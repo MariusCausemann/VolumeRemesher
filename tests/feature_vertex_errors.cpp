@@ -1,8 +1,9 @@
 // Error paths of embedding into a given tet mesh: every vertex of the surface and of the forced
 // features must be strictly inside the mesh, and a forced edge must have distinct endpoints.
-// Each case ends in ip_error, which prints its message and exits, so this is its own executable
-// and a case passes iff the expected message was printed (PASS_REGULAR_EXPRESSION in
-// tests/CMakeLists.txt); a case that runs to completion fails.
+// Each case ends in ip_error, which prints its message and exits, so this is its own executable:
+// tests/CMakeLists.txt registers every case by its name here together with the message it must
+// print (PASS_REGULAR_EXPRESSION), and a case that runs to completion fails. Keep the names in
+// sync with tests/CMakeLists.txt.
 
 #include <catch2/catch_test_macros.hpp>
 

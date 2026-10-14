@@ -134,8 +134,11 @@ endif()
 catch_discover_tests(feature_vertex_regression)
 
 # Error paths of embedding into a given tet mesh (feature_vertex_errors.cpp). Every case ends in
-# ip_error, which prints its message and exits, so a case passes iff one of the expected messages
-# was printed; a case that runs to completion prints Catch's summary instead and fails.
+# ip_error, which prints its message and exits, so each case is registered here by its Catch2
+# name together with the message it must print: it passes iff the message appears, and a case
+# that runs to completion prints Catch's summary instead and fails. Not through
+# catch_discover_tests: its build-time discovery step passes the test properties through cmd.exe
+# on Windows, where the `|` of a regex alternation is a pipe.
 add_executable(feature_vertex_errors feature_vertex_errors.cpp feature_vertex_fixtures.h)
 target_link_libraries(feature_vertex_errors PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(feature_vertex_errors PRIVATE cxx_std_20)
@@ -145,6 +148,13 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 			$<TARGET_RUNTIME_DLLS:feature_vertex_errors> $<TARGET_FILE_DIR:feature_vertex_errors>
 		COMMAND_EXPAND_LISTS)
 endif()
-catch_discover_tests(feature_vertex_errors
-	PROPERTIES PASS_REGULAR_EXPRESSION
-		"lies outside the tet mesh|lies on the boundary of the tet mesh|has coincident endpoints")
+function(feature_vertex_error_test case message)
+	add_test(NAME "feature_vertex_errors: ${case}" COMMAND feature_vertex_errors "${case}")
+	set_tests_properties("feature_vertex_errors: ${case}" PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+endfunction()
+feature_vertex_error_test("a forced point outside the tet mesh is an error" "lies outside the tet mesh")
+feature_vertex_error_test("a forced point on a boundary face of the tet mesh is an error" "lies on the boundary of the tet mesh")
+feature_vertex_error_test("a forced edge endpoint on a boundary edge of the tet mesh is an error" "lies on the boundary of the tet mesh")
+feature_vertex_error_test("a forced edge with coincident endpoints is an error" "has coincident endpoints")
+feature_vertex_error_test("a surface vertex outside the tet mesh is an error" "lies outside the tet mesh")
+feature_vertex_error_test("a surface vertex on the boundary of the tet mesh is an error" "lies on the boundary of the tet mesh")
