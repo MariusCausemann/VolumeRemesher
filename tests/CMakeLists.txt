@@ -119,9 +119,10 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 endif()
 catch_discover_tests(unit_tests_3d)
 
-# Forced points and edges on a background that already has the surface's vertices, and forced
-# points whose forcing-triangle corners would leave the background (feature_vertex_regression.cpp).
-add_executable(feature_vertex_regression feature_vertex_regression.cpp)
+# Forced points and edges on a background that already has the surface's vertices, whose
+# forcing-triangle corners would leave the background, or at a boundary vertex of the background
+# with no inward axis direction (feature_vertex_regression.cpp).
+add_executable(feature_vertex_regression feature_vertex_regression.cpp feature_vertex_fixtures.h)
 target_link_libraries(feature_vertex_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(feature_vertex_regression PRIVATE cxx_std_20)
 if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
@@ -131,3 +132,19 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		COMMAND_EXPAND_LISTS)
 endif()
 catch_discover_tests(feature_vertex_regression)
+
+# Error paths of embedding into a given tet mesh (feature_vertex_errors.cpp). Every case ends in
+# ip_error, which prints its message and exits, so a case passes iff one of the expected messages
+# was printed; a case that runs to completion prints Catch's summary instead and fails.
+add_executable(feature_vertex_errors feature_vertex_errors.cpp feature_vertex_fixtures.h)
+target_link_libraries(feature_vertex_errors PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(feature_vertex_errors PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET feature_vertex_errors POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:feature_vertex_errors> $<TARGET_FILE_DIR:feature_vertex_errors>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(feature_vertex_errors
+	PROPERTIES PASS_REGULAR_EXPRESSION
+		"lies outside the tet mesh|lies on the boundary of the tet mesh|has coincident endpoints")
