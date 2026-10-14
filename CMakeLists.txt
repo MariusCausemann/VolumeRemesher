@@ -147,17 +147,19 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 else()
 	# Pinned to exact commits for reproducible, byte-identical output across platforms
 	# (moving branch heads would let different CI runners fetch different sources).
-	# NFG 9b7635a (MarcoAttene/NFG#4) also counts _M_X64 as SSE2, so on MSVC x64 every
-	# translation unit gets the same (SIMD) interval_number layout whether or not it is
-	# built with /arch:AVX2 -- downstreams that link this library without that flag
-	# share NFG:: with it, and a layout mismatch swaps interval bounds across the link.
-	# On top of it, wildmeshing/NFG#1 adds bignatural::trimMemoryPool(), which lets a
-	# caller return the memory the thread-local bignatural pool grew into during an
-	# arrangement; the pool otherwise never shrinks. Back to upstream once it is merged
-	# there. fast-envelope pins the same commit: see its cmake/recipes/ipred.cmake.
+	# NFG: upstream main 2909ad6 -- MarcoAttene/NFG#4 counts _M_X64 as SSE2, so on MSVC x64
+	# every translation unit gets the same (SIMD) interval_number layout whether or not it
+	# is built with /arch:AVX2 (downstreams that link this library without that flag share
+	# NFG:: with it, and a layout mismatch swaps interval bounds across the link), and
+	# MarcoAttene/NFG#5 adds bignatural::trimMemoryPool(), which lets a caller return the
+	# memory the thread-local bignatural pool grew into during an arrangement -- plus
+	# wildmeshing/NFG's danielepanozzo/ip-error-exit-failure: ip_error exits with a failure
+	# status instead of 0, so ctest sees a test that trips it as failed (proposed upstream
+	# as MarcoAttene/NFG#6). Back to upstream once that is merged there. fast-envelope pins
+	# NFG too: see its cmake/recipes/ipred.cmake.
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/wildmeshing/NFG.git
-		GIT_TAG 05f99ea5584d8ba180ea35f878b0c02f2f888fd6
+		GIT_TAG a35198dc5762906f598ba77fc253d87cb8860f21
 		SOURCE_SUBDIR do-not-configure
 	)
 
@@ -167,9 +169,15 @@ else()
 		SOURCE_SUBDIR do-not-configure
 	)
 
+	# Delaunay3D: upstream main 8361b9a plus wildmeshing/Delaunay3D's
+	# danielepanozzo/orphan-inc-tet-point-search (proposed upstream as
+	# MarcoAttene/Delaunay3D#2): insertExistingVertexNonDelaunay marks a vertex it evicts
+	# (a coincident copy) as isolated instead of leaving its inc_tet stale, VT() guards
+	# against such a vertex, and searchTetrahedron takes a point as well as a vertex id
+	# (locate_point relies on it). Back to upstream once that is merged there.
 	FetchContent_Declare(Delaunay3D
-		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
-		GIT_TAG 8361b9a98b93a4991191866bb310a2dc39cb08fd
+		GIT_REPOSITORY https://github.com/wildmeshing/Delaunay3D.git
+		GIT_TAG c9b3eec9fc794df64597e9652ce162ba819f2937
 		SOURCE_SUBDIR do-not-configure
 	)
 
