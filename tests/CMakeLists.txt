@@ -124,4 +124,10 @@ catch_discover_tests(unit_tests_3d)
 add_executable(feature_vertex_regression feature_vertex_regression.cpp)
 target_link_libraries(feature_vertex_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(feature_vertex_regression PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET feature_vertex_regression POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:feature_vertex_regression> $<TARGET_FILE_DIR:feature_vertex_regression>
+		COMMAND_EXPAND_LISTS)
+endif()
 catch_discover_tests(feature_vertex_regression)
