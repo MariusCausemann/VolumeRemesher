@@ -91,10 +91,11 @@ struct extra_features_t
 // triangles to the constraints (num_edge_triangles / num_point_triangles record the
 // counts). Must run before the Delaunay permutation and place_virtual_constraints.
 //
-// keep_corners_inside: the forcing-triangle corners must stay inside the bounding box of the
-// vertices already in the mesh -- set when embedding into a given tet mesh, whose vertices are
-// all the room there is. A corner that +L along an axis would leave that box is placed at -L
-// instead; the triangles still meet only along AB (or only at P), so they pin it the same way.
+// keep_corners_inside: every forcing-triangle corner must lie in a tet of the mesh -- set when
+// embedding into a given tet mesh, whose tets are all the room there is. A corner outside the
+// mesh at +L along its axis is tried at -L, then at +-L/2, +-L/4, ...; the triangles still meet
+// only along AB (or only at P), so they pin it the same way. A forced point or edge endpoint on
+// the mesh's boundary with no inside corner along some axis is an error.
 void insert_edges_and_points(
     constraints_t* constraints,
     TetMesh* mesh,

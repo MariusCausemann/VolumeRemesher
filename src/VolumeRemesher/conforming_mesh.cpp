@@ -3699,18 +3699,55 @@ void insert_edges_and_points(
                 norm(mesh->vertices[v].Z())},
             v);
 
-    // The box the corners must stay in (keep_corners_inside): that of the vertices already in the
-    // mesh. Without it, a forced point or edge on the maximum side of the background mesh -- a
-    // surface vertex at the input's bounding-box maximum, with tetwild's diag/15 padding smaller
-    // than the displacement -- put a corner outside every tet, and the embedding hung or crashed.
-    double box_hi[3] = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
-    if (keep_corners_inside)
-        for (uint32_t v = 0; v < base_v; v++)
-            for (int k = 0; k < 3; k++)
-                box_hi[k] = std::max(box_hi[k], mesh->vertices[v].coord[k]);
-    // The displacement along axis k from coordinate c: +L, or -L if +L would leave the box.
-    auto corner_disp = [&](double c, int k, double L) -> double {
-        return (keep_corners_inside && c + L > box_hi[k]) ? -L : L;
+    // keep_corners_inside: every forcing-triangle corner must lie in a tet of the mesh (the
+    // closed union of its tets). Without it, a forced point or edge near the boundary of the
+    // background -- a surface vertex at the input's bounding-box maximum, with tetwild's diag/15
+    // padding smaller than the displacement -- put a corner outside every tet, and the embedding
+    // hung or crashed. Decided exactly, by the walk searchTetrahedron does: from a tet, step
+    // through any face the point is strictly beyond. It ends in a ghost tet exactly when the
+    // point is outside the mesh, else in a tet whose closure contains the point.
+    uint64_t walk_tet = 0;
+    auto in_mesh = [&](const pointType& q) -> bool {
+        uint64_t tet = walk_tet;
+        if (mesh->tet_node[tet + 3] == INFINITE_VERTEX)
+            tet = mesh->getIthNeighbor(mesh->getTetNeighs(tet), 3);
+        uint64_t i, f0 = 4;
+        do {
+            const uint32_t* N = mesh->getTetNodes(tet);
+            if (N[3] == INFINITE_VERTEX) return false;
+            const uint64_t* Ng = mesh->getTetNeighs(tet);
+            for (i = 0; i < 4; i++)
+                if (i != f0 && -pointType::orient3D(
+                                   mesh->vertices[N[TetMesh::tetON1(i)]],
+                                   mesh->vertices[N[TetMesh::tetON2(i)]],
+                                   mesh->vertices[N[TetMesh::tetON3(i)]],
+                                   q) < 0) {
+                    tet = mesh->getIthNeighbor(Ng, i);
+                    f0 = Ng[i] & 3;
+                    break;
+                }
+        } while (i != 4);
+        walk_tet = tet; // the next corner is nearby
+        return true;
+    };
+    // The displacement of a corner from base point b along axis k: +L if that corner is in the
+    // mesh, else -L, else the same at L/2, L/4, ... The forcing triangles meet only at P (only
+    // along AB) for any nonzero displacements, so each corner may take its own. A b interior to
+    // the mesh has an inside corner at some scale; a b on its boundary may have none along an
+    // axis, and once the displacement no longer changes b's coordinate that is an error.
+    auto corner_disp = [&](const double b[3], int k, double L) -> double {
+        if (!keep_corners_inside) return L;
+        for (double l = L;; l *= 0.5) {
+            for (const double d : {l, -l}) {
+                double q[3] = {b[0], b[1], b[2]};
+                q[k] += d;
+                if (q[k] == b[k])
+                    ip_error(
+                        "insert_edges_and_points: a forced point or edge endpoint lies on the "
+                        "boundary of the tet mesh, and no forcing-triangle corner fits inside it\n");
+                if (in_mesh(pointType(q[0], q[1], q[2]))) return d;
+            }
+        }
     };
 
     uint32_t ti = base_t;
@@ -3761,13 +3798,14 @@ void insert_edges_and_points(
         const double Le = L * DISP_FACTOR;
         for (int k = 0; k < 3; k++) {
             if (k == drop) continue;
-            double ax = A.X(), ay = A.Y(), az = A.Z();
+            const double a[3] = {A.X(), A.Y(), A.Z()};
+            double ax = a[0], ay = a[1], az = a[2];
             if (k == 0)
-                ax += corner_disp(ax, 0, Le);
+                ax += corner_disp(a, 0, Le);
             else if (k == 1)
-                ay += corner_disp(ay, 1, Le);
+                ay += corner_disp(a, 1, Le);
             else
-                az += corner_disp(az, 2, Le);
+                az += corner_disp(a, 2, Le);
             const uint32_t iap = add_vertex(ax, ay, az);
             add_tri(ia, ib, iap);
         }
@@ -3779,9 +3817,10 @@ void insert_edges_and_points(
         const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
                      pz = extra.point_verts[3 * p + 2];
         const uint32_t ip = add_vertex(px, py, pz);
-        const uint32_t iax = add_vertex(px + corner_disp(px, 0, point_disp), py, pz);
-        const uint32_t iay = add_vertex(px, py + corner_disp(py, 1, point_disp), pz);
-        const uint32_t iaz = add_vertex(px, py, pz + corner_disp(pz, 2, point_disp));
+        const double pp[3] = {px, py, pz};
+        const uint32_t iax = add_vertex(px + corner_disp(pp, 0, point_disp), py, pz);
+        const uint32_t iay = add_vertex(px, py + corner_disp(pp, 1, point_disp), pz);
+        const uint32_t iaz = add_vertex(px, py, pz + corner_disp(pp, 2, point_disp));
         add_tri(ip, iax, iay);
         add_tri(ip, iay, iaz);
         add_tri(ip, iaz, iax);

@@ -78,11 +78,11 @@ struct Result
 };
 
 Result embed(
+    const Background& bg,
     const std::vector<double>& edge_coords,
     const std::vector<uint32_t>& edge_indexes,
     const std::vector<double>& point_coords)
 {
-    const Background bg = grid_background();
     Result r;
     std::vector<uint32_t> poly_vindexes, cell_findexes, tets_parent, facets_on_input;
     std::vector<bool> cells_with_faces_on_input;
@@ -126,7 +126,7 @@ bool vertex_at(const Result& r, uint32_t v, const double* p)
 TEST_CASE("a forced point on a surface vertex that the background also has", "[feature_vertex]")
 {
     const double p[3] = {0, 0, 0};
-    const Result r = embed({}, {}, std::vector<double>(p, p + 3));
+    const Result r = embed(grid_background(), {}, {}, std::vector<double>(p, p + 3));
     REQUIRE(!r.tets.empty());
     REQUIRE(r.point_provenance.size() == 1);
     CHECK(vertex_at(r, r.point_provenance[0][1], p));
@@ -135,7 +135,7 @@ TEST_CASE("a forced point on a surface vertex that the background also has", "[f
 TEST_CASE("a forced edge starting at a surface vertex that the background also has", "[feature_vertex]")
 {
     const std::vector<double> e = {0, 0, 0, 0.5, 0.5, 0.5};
-    const Result r = embed(e, {0, 1}, {});
+    const Result r = embed(grid_background(), e, {0, 1}, {});
     REQUIRE(!r.tets.empty());
     REQUIRE(r.edge_provenance.size() == 1);
     CHECK(!r.edge_provenance[0].empty());
@@ -147,7 +147,7 @@ TEST_CASE("a forced edge starting at a surface vertex that the background also h
 TEST_CASE("a forced point whose forcing corners would leave the background", "[feature_vertex]")
 {
     const double p[3] = {2, 2, 2};
-    const Result r = embed({}, {}, std::vector<double>(p, p + 3));
+    const Result r = embed(grid_background(), {}, {}, std::vector<double>(p, p + 3));
     REQUIRE(!r.tets.empty());
     REQUIRE(r.point_provenance.size() == 1);
     CHECK(vertex_at(r, r.point_provenance[0][1], p));
@@ -156,8 +156,29 @@ TEST_CASE("a forced point whose forcing corners would leave the background", "[f
 TEST_CASE("a forced edge whose forcing corners would leave the background", "[feature_vertex]")
 {
     const std::vector<double> e = {2, 2, 2, 0, 0, 1.5};
-    const Result r = embed(e, {0, 1}, {});
+    const Result r = embed(grid_background(), e, {0, 1}, {});
     REQUIRE(!r.tets.empty());
     REQUIRE(r.edge_provenance.size() == 1);
     CHECK(!r.edge_provenance[0].empty());
+}
+
+// A background that is not a box: one tet with corners (-1,-1,-1), (9,-1,-1), (-1,9,-1),
+// (-1,-1,9), whose slanted face is x + y + z = 7. The forced point (2,2,2.9) is inside (sum 6.9);
+// its corners at +0.228 along x, y and z have sum 7.128, outside the tet but inside its bounding
+// box, so only a test against the tets themselves sends them to -0.228 (sum 6.672). With
+// corners left at +0.228 the embedding still finishes, but with vertices outside the
+// background; so the check is that every output vertex lies in it (x + y + z <= 7).
+TEST_CASE("a forced point near the slanted face of a background that is not a box", "[feature_vertex]")
+{
+    const Background bg{{-1, -1, -1, 9, -1, -1, -1, 9, -1, -1, -1, 9}, {0, 1, 2, 3}};
+    const double p[3] = {2, 2, 2.9};
+    const Result r = embed(bg, {}, {}, std::vector<double>(p, p + 3));
+    REQUIRE(!r.tets.empty());
+    REQUIRE(r.point_provenance.size() == 1);
+    CHECK(vertex_at(r, r.point_provenance[0][1], p));
+    const vol_rem::bigrational seven(7.0);
+    size_t outside = 0;
+    for (size_t v = 0; 3 * v < r.coords.size(); v++)
+        if ((r.coords[3 * v] + r.coords[3 * v + 1] + r.coords[3 * v + 2] - seven).sgn() > 0) outside++;
+    CHECK(outside == 0);
 }
