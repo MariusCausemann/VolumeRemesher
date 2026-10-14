@@ -871,88 +871,47 @@ BSPcomplex* remakePolyhedralMesh(
     }
 
 
-    // Force extra edges/points into the embedding: their vertices are appended here so
-    // the insertExistingVerticesNonDelaunay call below inserts them along with the
-    // surface, and their forcing triangles ride through the rest of the pipeline as
-    // ordinary (non-surface) constraints. They must lie inside the tet mesh domain.
-    const bool has_extra_embed = extra && (extra->n_edges > 0 || extra->n_points > 0);
-    if (has_extra_embed)
-        insert_edges_and_points(constraints, mesh, *extra, verbose, /*keep_corners_inside=*/true);
-
-#ifndef NDEBUG
-    // Debug guard: inserted edge/point vertices -- and their forcing-triangle apexes, which
-    // are offset by the edge length (edges) or the average edge length (points) -- must lie
-    // inside the tet mesh M. Otherwise the non-Delaunay insertion below cannot locate them
-    // and crashes. This bounding-box test is a necessary condition (exact for a convex M)
-    // and turns the common "apex outside M" mistake into a clear assertion.
-    if (has_extra_embed) {
-        double lo[3] = {DBL_MAX, DBL_MAX, DBL_MAX}, hi[3] = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
-        for (uint32_t v = 0; v < orig_numv; v++)
-            for (int k = 0; k < 3; k++) {
-                const double c = mesh->vertices[v].coord[k];
-                if (c < lo[k]) lo[k] = c;
-                if (c > hi[k]) hi[k] = c;
-            }
-        for (uint32_t v = orig_numv; v < mesh->numVertices(); v++)
-            for (int k = 0; k < 3; k++) {
-                const double c = mesh->vertices[v].coord[k];
-                if (c < lo[k] || c > hi[k]) {
-                    fprintf(
-                        stderr,
-                        "remakePolyhedralMesh: an inserted edge/point vertex or forcing-triangle "
-                        "apex lies outside the tet mesh's bounding box. Edges/points and their "
-                        "apexes (offset by the edge length / average edge length) must be inside "
-                        "the embedding tet mesh.\n");
-                    assert(false && "inserted edge/point or apex is outside the tet mesh domain");
-                }
-            }
-    }
-#endif
+    // Force extra edges/points into the embedding: their vertices are appended here so the
+    // insertion loop below inserts them along with the surface, and their forcing triangles
+    // ride through the rest of the pipeline as ordinary (non-surface) constraints.
+    // insert_edges_and_points checks that they lie strictly inside the tet mesh and keeps the
+    // forcing-triangle corners inside it.
+    if (extra && (extra->n_edges > 0 || extra->n_points > 0))
+        insert_edges_and_points(constraints, mesh, *extra, verbose, orig_numv);
 
     // Allocate constr_group after all constraints exist (surface + edge/point forcing).
     constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
     if (constraints->num_triangles < 1) ip_error("No constraints loaded (surface/edges/points).");
 
-    // Insert constraint vertices into mesh
+    // Insert the surface and feature vertices into the tet mesh. Each has to be strictly inside
+    // it: searchTetrahedron ends in a ghost tet for a vertex outside (it never returns
+    // UINT64_MAX, so the former `tet != UINT64_MAX` guard was dead and the insertion read past
+    // the vertex array), and the insertion of a vertex on the boundary absorbs the ghost tets.
+    // A vertex at an existing vertex's position takes its place in every tet, and the earlier
+    // copy is left isolated (inc_tet == UINT64_MAX). That is harmless: nothing references it --
+    // read_nodes_and_constraints deduplicates the surface, and insert_edges_and_points maps a
+    // feature to the last copy, the one that survives.
     //for (uint32_t i = 0; i < mesh->numVertices(); i++) mesh->vertices[i].original_index = i;
-    uint64_t tet = 0;
+    uint64_t walk_tet = 0;
     for (uint32_t vi = orig_numv; vi < mesh->numVertices(); vi++) {
-        tet = mesh->searchTetrahedron(tet, vi);
-        if (tet != UINT64_MAX) mesh->insertExistingVertexNonDelaunay(vi, tet);
+        uint64_t tet = 0;
+        const point_location_t loc = locate_point(mesh, &walk_tet, mesh->vertices[vi], &tet);
+        if (loc != PT_INSIDE) {
+            char msg[256];
+            snprintf(
+                msg,
+                sizeof(msg),
+                "remakePolyhedralMesh: vertex %u of the surface or of a forced feature (%.17g, "
+                "%.17g, %.17g) lies %s the tet mesh; every vertex must be strictly inside it\n",
+                vi,
+                mesh->vertices[vi].X(),
+                mesh->vertices[vi].Y(),
+                mesh->vertices[vi].Z(),
+                loc == PT_OUTSIDE ? "outside" : "on the boundary of");
+            ip_error(msg);
+        }
+        mesh->insertExistingVertexNonDelaunay(vi, tet);
     }
-        
-
-    //for (uint32_t i = 0; i < constraints->num_triangles * 3; i++) {
-    //    constraints->tri_vertices[i] = mesh->vertices[constraints->tri_vertices[i]].original_index;
-    //}
-
-    // Here we may still have unused vertices (copies of coincident vertices that do not belong to
-    // tets) Should clean... here below a sketch of the algorithm
-
-    // uint32_t offset = 0;
-    // std::vector<uint32_t> map;
-    // map.resize(mesh->num_vertices);
-    // for (uint32_t i = 0; i < mesh->num_vertices; i++) map[i] = i;
-
-    // for (uint32_t i = 0; i < mesh->num_vertices; i++) {
-    //     vertex_t& v = mesh->vertices[i];
-    //     map[i] -= offset;
-    //     if (v.original_index != i) {
-    //         v.original_index = UINT32_MAX;
-    //         offset++;
-    //     }
-    // }
-
-
-    // 0) Init 'offset' to zero
-    // 1) Create another vector<uint32_t> 'map' as large as mesh->vertices and init it with
-    // increasing indexes 2) for each vertex v = vertices[i], decrease map[i] by offset
-    //    Check whether 'v's original index corresponds to its position i.
-    //    if not (the vertex must be eventually deleted):
-    //      set original_index to UINT32_MAX
-    //      increase 'offset'
-    // 3) std::erase all vertices having original_index == UINT32_MAX
-    // 4) replace each connstraints->tri_vertices[i] with map[constraints->tri_vertices[i]]
 
     clock_t time0 = clock();
     clock_t time2 = time0;

@@ -34,9 +34,12 @@ namespace vol_rem {
 /// <param name="verbose">Set to TRUE to enable verbosity.</param>
 ///
 /// EXTRA 1D/0D FEATURES (optional; pass empty vectors to skip)
-/// NOTE: as with the input surface, the extra edges/points -- and the forcing-triangle
-/// apexes they generate, which are offset by the edge length (edges) or the average input
-/// edge length (points) -- must lie inside the tet mesh M's domain.
+/// NOTE: M must be convex (the vertices are located by walking its adjacency), and every
+/// vertex of T and of the extra edges/points must lie strictly inside M -- not on its
+/// boundary -- unless it coincides with a vertex of M; a vertex on or outside the boundary
+/// is reported as an error. The forcing-triangle corners the extra features generate (at
+/// 0.1 x the edge length from an edge's endpoint, 0.1 x the point spacing from a point) are
+/// placed inside M automatically.
 /// <param name="edge_vrt_coords">Vertex coordinates of the extra edges (x,y,z,...)</param>
 /// <param name="edge_indexes">Endpoint index pairs into edge_vrt_coords (e1_v1,e1_v2,...)</param>
 /// <param name="point_coords">Coordinates of the extra points (x,y,z,...)</param>
