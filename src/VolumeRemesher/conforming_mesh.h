@@ -84,14 +84,44 @@ struct extra_features_t
 };
 
 // Force the given edges and points to appear in the output tetrahedralization by
-// adding, per edge, the two largest-area triangles among (A, B, A + |AB|*e_{x,y,z})
-// (they share edge AB, pinning it), and per point, the three "corner" triangles
-// (P, P + L*e_i, P + L*e_j) with L = average input-triangle edge length (they share
-// vertex P, pinning it). New vertices are appended to the mesh and the forcing
-// triangles to the constraints (num_edge_triangles / num_point_triangles record the
-// counts). Must run before the Delaunay permutation and place_virtual_constraints.
+// adding, per edge, two triangles that share edge AB (pinning it), and per point, three
+// triangles that share only vertex P (pinning it). The third corner of each triangle is at
+// a displacement L = 0.1 x |AB| (edges) or 0.1 x the point spacing (points) from A / P
+// along a coordinate axis: the two largest-area triangles among (A, B, A + L e_{x,y,z})
+// for an edge, the "corner" triangles (P, P + L e_i, P + L e_j) for a point. New vertices
+// are appended to the mesh and the forcing triangles to the constraints
+// (num_edge_triangles / num_point_triangles record the counts). Must run before the
+// Delaunay permutation and place_virtual_constraints.
+//
+// num_tet_mesh_vertices: when embedding into a given tet mesh (remakePolyhedralMesh), the
+// number of its vertices -- the mesh's first vertices; those after them were appended for
+// the surface and are inserted later. 0 when the mesh has no tets yet (makePolyhedralMesh,
+// where the Delaunay tetrahedralization makes room for everything). In a given tet mesh
+// every appended vertex has to lie strictly inside the mesh: a forced point or edge endpoint
+// that is not an existing vertex and lies on or outside the boundary is an error, and a
+// corner that would fall outside is moved -- to -L along its axis, then +-L/2, +-L/4, ...;
+// when no axis direction fits (the base point is a boundary vertex of the mesh whose inward
+// cone holds none, e.g. the apex of a rotated tet) the corners are taken inside a tet that
+// holds the base point instead. Either way the triangles still share only AB (only P), so
+// they pin it the same way. The mesh must be convex: see locate_point.
 void insert_edges_and_points(
-    constraints_t* constraints, TetMesh* mesh, const extra_features_t& extra, bool verbose);
+    constraints_t* constraints,
+    TetMesh* mesh,
+    const extra_features_t& extra,
+    bool verbose,
+    uint32_t num_tet_mesh_vertices = 0);
+
+// Where point q lies with respect to a tet mesh (one with ghost tets around its boundary, as
+// TetMesh::init_tets builds): PT_INSIDE in the open interior of a tet or on a face/edge
+// interior to the mesh, PT_ON_HULL on a face, edge or vertex of the mesh's boundary, else
+// PT_OUTSIDE. Exact. *walk_tet is the (corner-base) tet the walk starts from, updated to the
+// tet found so that a nearby query starts close; *tet, if given, receives that tet for a
+// point inside or on the hull. Walks by adjacency like TetMesh::searchTetrahedron, so the
+// mesh must be convex: in a non-convex one the walk can leave through a reentrant face and
+// report a point in another part of the mesh as PT_OUTSIDE.
+enum point_location_t { PT_OUTSIDE, PT_ON_HULL, PT_INSIDE };
+point_location_t
+locate_point(const TetMesh* mesh, uint64_t* walk_tet, const pointType& q, uint64_t* tet);
 uint32_t
 place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t* half_edges);
 void insert_constraints(

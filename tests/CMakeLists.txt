@@ -118,3 +118,43 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		COMMAND_EXPAND_LISTS)
 endif()
 catch_discover_tests(unit_tests_3d)
+
+# Forced points and edges on a background that already has the surface's vertices, whose
+# forcing-triangle corners would leave the background, or at a boundary vertex of the background
+# with no inward axis direction (feature_vertex_regression.cpp).
+add_executable(feature_vertex_regression feature_vertex_regression.cpp feature_vertex_fixtures.h)
+target_link_libraries(feature_vertex_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(feature_vertex_regression PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET feature_vertex_regression POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:feature_vertex_regression> $<TARGET_FILE_DIR:feature_vertex_regression>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(feature_vertex_regression)
+
+# Error paths of embedding into a given tet mesh (feature_vertex_errors.cpp). Every case ends in
+# ip_error, which prints its message and exits, so each case is registered here by its Catch2
+# name together with the message it must print: it passes iff the message appears, and a case
+# that runs to completion prints Catch's summary instead and fails. Not through
+# catch_discover_tests: its build-time discovery step passes the test properties through cmd.exe
+# on Windows, where the `|` of a regex alternation is a pipe.
+add_executable(feature_vertex_errors feature_vertex_errors.cpp feature_vertex_fixtures.h)
+target_link_libraries(feature_vertex_errors PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(feature_vertex_errors PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET feature_vertex_errors POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:feature_vertex_errors> $<TARGET_FILE_DIR:feature_vertex_errors>
+		COMMAND_EXPAND_LISTS)
+endif()
+function(feature_vertex_error_test case message)
+	add_test(NAME "feature_vertex_errors: ${case}" COMMAND feature_vertex_errors "${case}")
+	set_tests_properties("feature_vertex_errors: ${case}" PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+endfunction()
+feature_vertex_error_test("a forced point outside the tet mesh is an error" "lies outside the tet mesh")
+feature_vertex_error_test("a forced point on a boundary face of the tet mesh is an error" "lies on the boundary of the tet mesh")
+feature_vertex_error_test("a forced edge endpoint on a boundary edge of the tet mesh is an error" "lies on the boundary of the tet mesh")
+feature_vertex_error_test("a forced edge with coincident endpoints is an error" "has coincident endpoints")
+feature_vertex_error_test("a surface vertex outside the tet mesh is an error" "lies outside the tet mesh")
+feature_vertex_error_test("a surface vertex on the boundary of the tet mesh is an error" "lies on the boundary of the tet mesh")

@@ -1,7 +1,9 @@
 #include "conforming_mesh.h"
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
@@ -484,6 +486,11 @@ uint32_t opposite_vertex_face(const TetMesh* mesh, uint64_t tet_ind, const uint3
 //        (i.e. the other 3 vertices of tet).
 void opposite_face_vertices(const TetMesh* mesh, uint64_t tet_ind, uint32_t v_ind, uint32_t* ptr)
 {
+    // v_ind must be a corner of the tet, or the four other corners overflow ptr[3]. A vertex
+    // that is in no tet (its incident-tet entry stale) produced exactly that, silently.
+    const uint32_t* tn = mesh->tet_node.data() + 4 * tet_ind;
+    if (tn[0] != v_ind && tn[1] != v_ind && tn[2] != v_ind && tn[3] != v_ind)
+        ip_error("opposite_face_vertices: vertex is not a corner of the tetrahedron\n");
     uint32_t j = 0, curr_v_ind;
     curr_v_ind = mesh->tet_node[4 * tet_ind];
     if (curr_v_ind != v_ind) ptr[j++] = curr_v_ind;
@@ -3583,15 +3590,56 @@ uint32_t fill_holes_in_constraints(constraints_t* constraints, const TetMesh* me
     return n_cap;
 }
 
+point_location_t
+locate_point(const TetMesh* mesh, uint64_t* walk_tet, const pointType& q, uint64_t* tet)
+{
+    const uint64_t t0 = mesh->searchTetrahedron(*walk_tet, q);
+    if (mesh->getTetNodes(t0)[3] == INFINITE_VERTEX) return PT_OUTSIDE;
+    *walk_tet = t0;
+    if (tet) *tet = t0;
+
+    // q is in the closure of t0. It is on the hull iff some face that q lies on, of a tet whose
+    // closure holds q, has a ghost neighbour: flood from t0 across the faces q lies on (none for
+    // a q in the open interior of t0, the faces around the edge or vertex otherwise).
+    static thread_local std::vector<uint64_t> stack, seen;
+    stack.assign(1, t0);
+    seen.assign(1, t0);
+    while (!stack.empty()) {
+        const uint64_t t = stack.back();
+        stack.pop_back();
+        const uint32_t* N = mesh->getTetNodes(t);
+        const uint64_t* Ng = mesh->getTetNeighs(t);
+        for (int i = 0; i < 4; i++) {
+            if (mesh->pOrient3D(
+                    N[TetMesh::tetON1(i)], N[TetMesh::tetON2(i)], N[TetMesh::tetON3(i)], q) != 0)
+                continue;
+            const uint64_t n = mesh->getIthNeighbor(Ng, i);
+            if (mesh->getTetNodes(n)[3] == INFINITE_VERTEX) return PT_ON_HULL;
+            if (std::find(seen.begin(), seen.end(), n) == seen.end()) {
+                seen.push_back(n);
+                stack.push_back(n);
+            }
+        }
+    }
+    return PT_INSIDE;
+}
+
 void insert_edges_and_points(
     constraints_t* constraints,
     TetMesh* mesh,
     const extra_features_t& extra,
-    bool verbose)
+    bool verbose,
+    uint32_t num_tet_mesh_vertices)
 {
     const uint32_t n_edges = extra.n_edges;
     const uint32_t n_points = extra.n_points;
     if (n_edges == 0 && n_points == 0) return;
+
+    // Embedding into a given tet mesh (remakePolyhedralMesh): the mesh already has tets, and
+    // every vertex appended here has to lie strictly inside them. makePolyhedralMesh calls this
+    // before anything is tetrahedrized; there the Delaunay tetrahedralization makes room for all.
+    const bool have_tets = mesh->numTets() > 0;
+    assert(have_tets == (num_tet_mesh_vertices > 0));
 
     // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
     // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
@@ -3672,18 +3720,123 @@ void insert_edges_and_points(
     // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
     // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
     // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
-    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
-    // mapping is deterministic.
+    // point. -0.0 is normalized to 0.0 so it matches +0.0.
+    //
+    // Among existing vertices at the same position the LAST one wins. remakePolyhedralMesh
+    // appends the surface vertices after the tet mesh's, and the tet mesh may already have a
+    // vertex at a surface vertex's position (wildmeshing-toolkit's tetwild builds it from the
+    // input vertices plus box points). Inserting a vertex at an existing vertex's position takes
+    // that vertex's place in every tet and leaves it in none, so with the insertion order the
+    // surviving copy is always the last one. A feature mapped to an evicted copy walked from a
+    // vertex no tet contains, and VT() returned tets that do not hold it (opposite_face_vertices
+    // then wrote 4 entries into a 3-entry array). Within one block the vertices are unique
+    // (read_nodes_and_constraints deduplicates the surface), so the choice is deterministic.
+    // A tet-mesh vertex that is in no tet (unreferenced by them) cannot anchor a feature either:
+    // nothing can walk from it. The surface vertices are in no tet yet too, but they are
+    // inserted before the features are used.
     auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
     std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
     vmap.reserve(base_v + nv_add);
-    for (uint32_t v = 0; v < base_v; v++)
+    for (uint32_t v = base_v; v-- > 0;) {
+        if (v < num_tet_mesh_vertices && mesh->inc_tet[v] == UINT64_MAX) continue;
         vmap.emplace(
             std::array<double, 3>{
                 norm(mesh->vertices[v].X()),
                 norm(mesh->vertices[v].Y()),
                 norm(mesh->vertices[v].Z())},
             v);
+    }
+
+    // Where the features go, in a given tet mesh. walk_tet starts each point location at the tet
+    // the previous one found (consecutive queries are close). A base point -- a forced point or
+    // an edge endpoint -- may be an existing vertex (of the tet mesh, or of the surface, which is
+    // inserted before the features are used) anywhere but outside the mesh, and otherwise has to
+    // be strictly inside it like every vertex inserted into the mesh: the insertion of a vertex
+    // on the boundary absorbs the ghost tets and reads past the vertex array. base_tet checks
+    // that and returns a tet whose closure holds the point.
+    uint64_t walk_tet = 0;
+    auto base_tet = [&](uint32_t idx, const double b[3], const char* what) -> uint64_t {
+        uint64_t tet = 0;
+        const point_location_t loc =
+            locate_point(mesh, &walk_tet, pointType(b[0], b[1], b[2]), &tet);
+        if (loc == PT_OUTSIDE || (loc == PT_ON_HULL && idx >= base_v)) {
+            char msg[256];
+            snprintf(
+                msg,
+                sizeof(msg),
+                "insert_edges_and_points: %s (%.17g, %.17g, %.17g) lies %s the tet mesh; it "
+                "must be strictly inside it\n",
+                what,
+                b[0],
+                b[1],
+                b[2],
+                loc == PT_OUTSIDE ? "outside" : "on the boundary of");
+            ip_error(msg);
+        }
+        return tet;
+    };
+
+    // Forcing-triangle corners. In the Delaunay pipeline a corner is b + L e_k, and the
+    // tetrahedralization makes room for it. In a given tet mesh it has to be strictly inside the
+    // mesh like any inserted vertex, and a feature near the boundary -- a surface vertex at the
+    // input's bounding-box maximum, with tetwild's diag/15 padding smaller than L -- had a corner
+    // outside every tet, so the embedding hung or crashed. Along the axis, +L is tried first,
+    // then -L, then +-L/2, +-L/4, ... down to L/2^20: the triangles' planes stay x=Px, y=Py,
+    // z=Pz (the triangles keep sharing AB), so they pin the feature the same way at any nonzero
+    // displacement, and the corners of a feature well inside the mesh are unchanged.
+    static const int MAX_HALVINGS = 20;
+    auto axis_corner = [&](const double b[3], int k, double L, double q[3]) -> bool {
+        q[0] = b[0];
+        q[1] = b[1];
+        q[2] = b[2];
+        if (!have_tets) {
+            q[k] += L;
+            return true;
+        }
+        double l = L;
+        for (int h = 0; h <= MAX_HALVINGS; h++, l *= 0.5)
+            for (const double d : {l, -l}) {
+                q[k] = b[k] + d;
+                if (q[k] != b[k] &&
+                    locate_point(mesh, &walk_tet, pointType(q[0], q[1], q[2]), nullptr) ==
+                        PT_INSIDE)
+                    return true;
+            }
+        return false;
+    };
+    // When no displacement fits along some axis -- b is a boundary vertex of the mesh whose
+    // inward cone holds no axis direction, e.g. the apex of a rotated tet -- all the corners of
+    // the feature come from a tet T whose closure holds b instead: with c the centroid of T and
+    // T_j its vertices, the points g_j = (c + T_j) / 2 are strictly inside T, and b, g_0..g_3
+    // affinely span space, so among the corners b + lambda_j (g_j - b), lambda_j <= 1 and
+    // |corner - b| <= L, there are three (two) that, with b (with A and B), are not coplanar;
+    // the exact orient3D test at the caller picks them. The corners are inside T by
+    // construction; the rounding of their coordinates could only matter for a b within a few
+    // ulps of T's boundary, which halving lambda settles.
+    auto tet_corners = [&](const double b[3], uint64_t tb, double L, double g[4][3]) {
+        const uint32_t* N = mesh->getTetNodes(tb);
+        double c[3] = {0.0, 0.0, 0.0};
+        for (int j = 0; j < 4; j++)
+            for (int k = 0; k < 3; k++) c[k] += 0.25 * mesh->vertices[N[j]].coord[k];
+        for (int j = 0; j < 4; j++) {
+            double d[3], n2 = 0.0;
+            for (int k = 0; k < 3; k++) {
+                d[k] = 0.5 * (c[k] + mesh->vertices[N[j]].coord[k]) - b[k];
+                n2 += d[k] * d[k];
+            }
+            const double n = std::sqrt(n2);
+            double lambda = (n > L) ? L / n : 1.0;
+            for (int h = 0;; h++, lambda *= 0.5) {
+                for (int k = 0; k < 3; k++) g[j][k] = b[k] + lambda * d[k];
+                if (locate_point(mesh, &walk_tet, pointType(g[j][0], g[j][1], g[j][2]), nullptr) ==
+                    PT_INSIDE)
+                    break;
+                if (h == MAX_HALVINGS)
+                    ip_error("insert_edges_and_points: no forcing-triangle corner fits inside "
+                             "the tet mesh\n");
+            }
+        }
+    };
 
     uint32_t ti = base_t;
     auto add_vertex = [&](double x, double y, double z) -> uint32_t {
@@ -3720,8 +3873,28 @@ void insert_edges_and_points(
         const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
         const pointType A = mesh->vertices[ia];
         const pointType B = mesh->vertices[ib];
-        const double dx = B.X() - A.X(), dy = B.Y() - A.Y(), dz = B.Z() - A.Z();
+        const double a[3] = {A.X(), A.Y(), A.Z()};
+        const double b[3] = {B.X(), B.Y(), B.Z()};
+        const double dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
         const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (!(L > 0.0)) {
+            char msg[192];
+            snprintf(
+                msg,
+                sizeof(msg),
+                "insert_edges_and_points: forced edge %u has coincident endpoints (%.17g, %.17g, "
+                "%.17g)\n",
+                e,
+                a[0],
+                a[1],
+                a[2]);
+            ip_error(msg);
+        }
+        uint64_t ta = 0;
+        if (have_tets) {
+            ta = base_tet(ia, a, "an edge endpoint");
+            base_tet(ib, b, "an edge endpoint");
+        }
         const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
         int drop = 0;
         double amax = adx;
@@ -3731,29 +3904,72 @@ void insert_edges_and_points(
         }
         if (adz > amax) drop = 2;
         const double Le = L * DISP_FACTOR;
-        for (int k = 0; k < 3; k++) {
-            if (k == drop) continue;
-            double ax = A.X(), ay = A.Y(), az = A.Z();
-            if (k == 0)
-                ax += Le;
-            else if (k == 1)
-                ay += Le;
-            else
-                az += Le;
-            const uint32_t iap = add_vertex(ax, ay, az);
-            add_tri(ia, ib, iap);
+        double q[2][3];
+        int ns = 0;
+        bool axes_fit = true;
+        for (int k = 0; k < 3 && axes_fit; k++)
+            if (k != drop) axes_fit = axis_corner(a, k, Le, q[ns++]);
+        if (!axes_fit) {
+            // The first pair of tet corners X, Y such that A, B, X, Y are not coplanar: the
+            // triangles ABX and ABY are then non-degenerate and non-coplanar, and pin AB.
+            double g[4][3];
+            tet_corners(a, ta, Le, g);
+            bool found = false;
+            for (int j0 = 0; j0 < 4 && !found; j0++)
+                for (int j1 = j0 + 1; j1 < 4 && !found; j1++)
+                    if (pointType::orient3D(
+                            A,
+                            B,
+                            pointType(g[j0][0], g[j0][1], g[j0][2]),
+                            pointType(g[j1][0], g[j1][1], g[j1][2])) != 0) {
+                        std::copy(g[j0], g[j0] + 3, q[0]);
+                        std::copy(g[j1], g[j1] + 3, q[1]);
+                        found = true;
+                    }
+            if (!found) // cannot happen: A, g_0..g_3 affinely span space
+                ip_error("insert_edges_and_points: no forcing-triangle corners for an edge\n");
         }
+        for (int s = 0; s < 2; s++) add_tri(ia, ib, add_vertex(q[s][0], q[s][1], q[s][2]));
     }
 
     // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
-    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
+    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex. (When
+    // the corners come from a tet instead, the three triangles are chosen not coplanar, so
+    // they still meet only at P.)
     for (uint32_t p = 0; p < n_points; p++) {
-        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
-                     pz = extra.point_verts[3 * p + 2];
-        const uint32_t ip = add_vertex(px, py, pz);
-        const uint32_t iax = add_vertex(px + point_disp, py, pz);
-        const uint32_t iay = add_vertex(px, py + point_disp, pz);
-        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
+        const double pp[3] = {
+            extra.point_verts[3 * p], extra.point_verts[3 * p + 1], extra.point_verts[3 * p + 2]};
+        const uint32_t ip = add_vertex(pp[0], pp[1], pp[2]);
+        uint64_t tp = 0;
+        if (have_tets) tp = base_tet(ip, pp, "a forced point");
+        double q[3][3];
+        bool axes_fit = true;
+        for (int k = 0; k < 3 && axes_fit; k++) axes_fit = axis_corner(pp, k, point_disp, q[k]);
+        if (!axes_fit) {
+            // The first triple of tet corners X, Y, Z such that P, X, Y, Z are not coplanar.
+            double g[4][3];
+            tet_corners(pp, tp, point_disp, g);
+            const pointType P(pp[0], pp[1], pp[2]);
+            bool found = false;
+            for (int j0 = 0; j0 < 4 && !found; j0++)
+                for (int j1 = j0 + 1; j1 < 4 && !found; j1++)
+                    for (int j2 = j1 + 1; j2 < 4 && !found; j2++)
+                        if (pointType::orient3D(
+                                P,
+                                pointType(g[j0][0], g[j0][1], g[j0][2]),
+                                pointType(g[j1][0], g[j1][1], g[j1][2]),
+                                pointType(g[j2][0], g[j2][1], g[j2][2])) != 0) {
+                            std::copy(g[j0], g[j0] + 3, q[0]);
+                            std::copy(g[j1], g[j1] + 3, q[1]);
+                            std::copy(g[j2], g[j2] + 3, q[2]);
+                            found = true;
+                        }
+            if (!found) // cannot happen: P, g_0..g_3 affinely span space
+                ip_error("insert_edges_and_points: no forcing-triangle corners for a point\n");
+        }
+        const uint32_t iax = add_vertex(q[0][0], q[0][1], q[0][2]);
+        const uint32_t iay = add_vertex(q[1][0], q[1][1], q[1][2]);
+        const uint32_t iaz = add_vertex(q[2][0], q[2][1], q[2][2]);
         add_tri(ip, iax, iay);
         add_tri(ip, iay, iaz);
         add_tri(ip, iaz, iax);
