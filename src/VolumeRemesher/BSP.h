@@ -2,6 +2,7 @@
 #define BSP_h
 
 #include "conforming_mesh.h"
+#include "mesh_output.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <array>
@@ -313,13 +314,25 @@ public:
         }
     }
 
-    // Save the faces representing the input constraints
+    // Fill an in-memory snapshot of what the save* members write (mesh_output.h). With
+    // black_faces the faces representing the input constraints, otherwise the faces that
+    // separate in and out after applying bool_opcode. Mutates the complex (triangulation,
+    // cell relabelling) exactly as the writer always did, so call it once per complex.
+    void extractSurface(
+        const char bool_opcode, bool triangulate, bool black_faces, SurfaceOutput& out);
+
+    // The volume as polyhedral cells, or (tetrahedrize) as tetrahedra with provenance and,
+    // on request, exact coordinates. Mutates the complex like extractSurface; once per complex.
+    void extractVolume(
+        const char bool_opcode, bool tetrahedrize, bool export_rational, VolumeOutput& out);
+
+    // Save the faces representing the input constraints (= extractSurface + write_surface_off)
     void saveBlackFaces(const char* filename, bool triangulate = false);
 
-    // Save the faces that separate in and out
+    // Save the faces that separate in and out (= extractSurface + write_surface_off)
     void saveSkin(const char* filename, const char bool_opcode, bool triangulate = false);
 
-    // Save the mesh
+    // Save the mesh (= extractVolume + write_volume)
     void saveMesh(
         const char* filename,
         const char bool_opcode,

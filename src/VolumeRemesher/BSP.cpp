@@ -3574,44 +3574,56 @@ void BSPcomplex::extractSkinTriMesh(
 }
 
 
-void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool triangulate)
+// Fill a SurfaceOutput with the skin (the faces separating in from out, after applying the
+// boolean opcode) or, with black_faces, the subdivided input constraints. This is the body the
+// saveSkin/saveBlackFaces writers had; they now call it and hand the result to write_surface_off.
+void BSPcomplex::extractSurface(
+    const char bool_opcode, bool triangulate, bool black_faces, SurfaceOutput& out)
 {
+    out = SurfaceOutput();
+
     if (triangulate) {
         const uint64_t num_faces = faces.size();
         for (uint64_t face_ind = 0; face_ind < num_faces; face_ind++) triangulateFace(face_ind);
     }
 
-    if (bool_opcode == 'U') { // Union
-        for (BSPcell& cell : cells)
-            cell.place =
-                (cell.place == INTERNAL_A || cell.place == INTERNAL_B || cell.place == INTERNAL_AB)
-                    ? (INTERNAL_A)
-                    : (EXTERNAL);
-    }
-
-    else if (bool_opcode == 'I') { // Intersection
-        for (BSPcell& cell : cells)
-            cell.place = (cell.place == INTERNAL_AB) ? (INTERNAL_A) : (EXTERNAL);
-    }
-
-    else if (bool_opcode == 'D') { // Difference A\B
-        for (BSPcell& cell : cells)
-            cell.place = (cell.place == INTERNAL_A && !(cell.place == INTERNAL_AB)) ? (INTERNAL_A)
-                                                                                    : (EXTERNAL);
-    }
-
-    // Set "internal" depending on bool_opcode and find border faces to save
     vector<uint64_t> mark(faces.size(), 0);
-    for (BSPcell& cell : cells)
-        if (cell.place == INTERNAL_A)
-            for (uint64_t fi = 0; fi < cell.faces.size(); fi++) mark[cell.faces[fi]]++;
+    if (!black_faces) {
+        if (bool_opcode == 'U') { // Union
+            for (BSPcell& cell : cells)
+                cell.place = (cell.place == INTERNAL_A || cell.place == INTERNAL_B ||
+                              cell.place == INTERNAL_AB)
+                                 ? (INTERNAL_A)
+                                 : (EXTERNAL);
+        }
+
+        else if (bool_opcode == 'I') { // Intersection
+            for (BSPcell& cell : cells)
+                cell.place = (cell.place == INTERNAL_AB) ? (INTERNAL_A) : (EXTERNAL);
+        }
+
+        else if (bool_opcode == 'D') { // Difference A\B
+            for (BSPcell& cell : cells)
+                cell.place = (cell.place == INTERNAL_A && !(cell.place == INTERNAL_AB))
+                                 ? (INTERNAL_A)
+                                 : (EXTERNAL);
+        }
+
+        // Set "internal" depending on bool_opcode and find border faces to save
+        for (BSPcell& cell : cells)
+            if (cell.place == INTERNAL_A)
+                for (uint64_t fi = 0; fi < cell.faces.size(); fi++) mark[cell.faces[fi]]++;
+    }
+    auto selected = [&](uint64_t f_i) {
+        return black_faces ? (faces[f_i].colour != WHITE) : (mark[f_i] == 1);
+    };
 
     for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
     for (size_t i = 0; i < edges.size(); i++) edge_visit[i] = 0;
 
     uint64_t num_border_faces = 0;
     for (uint64_t f_i = 0; f_i < faces.size(); f_i++)
-        if (mark[f_i] == 1) {
+        if (selected(f_i)) {
             num_border_faces++;
             for (uint64_t eid : faces[f_i].edges) edge_visit[eid] = 1;
         }
@@ -3625,38 +3637,42 @@ void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool tri
         if (vrts_visit[i]) num_v++;
     }
 
-    // Binary mode so line endings stay LF on every OS (byte-identical output).
-    ofstream f(filename, std::ios::binary);
-
-    if (!f) ip_error("BSPcomplex::saveSkin: cannot open the file.\n");
-
-    f << "OFF\n";
-    f << num_v << " ";
-    f << num_border_faces << " ";
-    f << "0\n";
-
-    // Print vertices coordinates
+    // Vertex coordinates: the same approximation operator<<(genericPoint) prints.
+    out.coords.reserve(3 * num_v);
     for (uint32_t v = 0; v < vertices.size(); v++)
-        if (vrts_visit[v]) f << (*(vertices)[v]) << "\n";
+        if (vrts_visit[v]) {
+            double x, y, z;
+            if (!vertices[v]->getApproxXYZCoordinates(x, y, z, true))
+                ip_error("BSPcomplex::extractSurface: undefined vertex coordinates.\n");
+            out.coords.push_back(x);
+            out.coords.push_back(y);
+            out.coords.push_back(z);
+        }
 
-    // Print border faces
+    // Border faces
+    out.face_offsets.reserve(num_border_faces + 1);
+    out.face_offsets.push_back(0);
     for (uint32_t f_i = 0; f_i < faces.size(); f_i++)
-        if (mark[f_i] == 1) {
+        if (selected(f_i)) {
             BSPface& face = faces[f_i];
             vector<uint32_t> face_vrts(face.edges.size(), UINT32_MAX);
             list_faceVertices(face, face_vrts);
-            f << face_vrts.size();
 
-            if (cells[face.conn_cells[0]].place == INTERNAL_A)
+            if (!black_faces && cells[face.conn_cells[0]].place == INTERNAL_A)
                 for (uint32_t v = (uint32_t)face_vrts.size(); v > 0; v--)
-                    f << " " << vmap[face_vrts[v - 1]];
+                    out.face_vertices.push_back(vmap[face_vrts[v - 1]]);
             else
-                for (uint32_t v = 0; v < face_vrts.size(); v++) f << " " << vmap[face_vrts[v]];
-
-            f << "\n";
+                for (uint32_t v = 0; v < face_vrts.size(); v++)
+                    out.face_vertices.push_back(vmap[face_vrts[v]]);
+            out.face_offsets.push_back((uint32_t)out.face_vertices.size());
         }
+}
 
-    f.close();
+void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool triangulate)
+{
+    SurfaceOutput out;
+    extractSurface(bool_opcode, triangulate, false, out);
+    write_surface_off(filename, out);
 }
 
 
@@ -3673,17 +3689,14 @@ static inline std::string rational_to_string(const bigrational& r)
 #endif
 }
 
-void BSPcomplex::saveMesh(
-    const char* filename, const char bool_opcode, bool tetrahedrize, bool export_rational)
+// Fill a VolumeOutput with the polyhedral cells (tetrahedrize == false) or the tetrahedra
+// plus their provenance (tetrahedrize == true) of the region the boolean opcode selects. This
+// is the body saveMesh had; it now calls it and hands the result to write_volume.
+void BSPcomplex::extractVolume(
+    const char bool_opcode, bool tetrahedrize, bool export_rational, VolumeOutput& out)
 {
-    // Binary mode so line endings stay LF on every OS (byte-identical output).
-    ofstream f(filename, std::ios::binary);
-
-    if (!f) ip_error("\nBSPcomplex::[BSP.cpp]saveTetMesh: FATAL ERROR cannot open the file.\n");
-
-    // Full double precision: the default ostream precision (6 significant figures)
-    // collapses/inverts elements on fine or large-coordinate meshes.
-    f.precision(17);
+    out = VolumeOutput();
+    out.tetrahedral = tetrahedrize;
 
     const uint64_t num_faces = faces.size();
 
@@ -3709,14 +3722,21 @@ void BSPcomplex::saveMesh(
                                                                                     : (EXTERNAL);
     }
 
+    // The same approximation operator<<(genericPoint) prints.
+    auto push_coords = [&](uint32_t v) {
+        double x, y, z;
+        if (!vertices[v]->getApproxXYZCoordinates(x, y, z, true))
+            ip_error("BSPcomplex::extractVolume: undefined vertex coordinates.\n");
+        out.coords.push_back(x);
+        out.coords.push_back(y);
+        out.coords.push_back(z);
+    };
+
     if (tetrahedrize) {
         makeTetrahedra();
 
         for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
         for (uint32_t t = 0; t < final_tets.size(); t++) vrts_visit[final_tets[t]] = 1;
-        uint32_t final_numver = 0;
-        for (size_t i = 0; i < vrts_visit.size(); i++)
-            if (vrts_visit[i]) final_numver++;
 
         std::vector<uint32_t> vmap(vertices.size(), 0);
         size_t num_v = 0;
@@ -3725,106 +3745,90 @@ void BSPcomplex::saveMesh(
             if (vrts_visit[i]) num_v++;
         }
 
-        f << final_numver << " vertices\n";
-        f << final_tets.size() / 4 << " tets\n";
-
-        // Print vertices coordinates.
-        // Use operator<< (approximate double coordinates), NOT get_str(): get_str()
-        // serializes the exact rational in a base that depends on the bignum backend
-        // (decimal with gmpxx, binary without), so its bytes diverge across platforms
-        // -- e.g. MSVC (no gmpxx) vs Linux/macOS. operator<< prints portable doubles,
-        // matching the .msh path below and read_TET_file's %lf parsing.
+        // Vertex coordinates. The approximate doubles, NOT the exact rationals: an exact
+        // coordinate's text would depend on the bignum backend (see exact_coords below for the
+        // portable form), and they match read_TET_file's %lf parsing.
+        out.coords.reserve(3 * num_v);
         for (uint32_t v = 0; v < vertices.size(); v++)
-            if (vrts_visit[v]) f << (*vertices[v]) << "\n";
+            if (vrts_visit[v]) push_coords(v);
 
-        // Print tets
-        for (uint32_t t = 0; t < final_tets.size(); t += 4)
-            f << "4 " << vmap[final_tets[t]] << " " << vmap[final_tets[t + 1]] << " "
-              << vmap[final_tets[t + 2]] << " " << vmap[final_tets[t + 3]] << "\n";
+        out.tets.reserve(final_tets.size());
+        for (uint32_t t = 0; t < final_tets.size(); t++) out.tets.push_back(vmap[final_tets[t]]);
 
-        // Sidecar 1: input-surface provenance, keyed by coplanar group (symmetric with the
-        // edge/point sidecars below). One line per group listing the output tet faces tiling
-        // it: "<group_id> <num_faces> <tet v0 v1 v2> <tet v0 v1 v2> ...", where tet is the
-        // output tet index (0-based, matching the tet block above) and v0 v1 v2 are its
-        // face's output vertex indices. (A face on two overlapping coplanar surfaces is
-        // listed under both groups; group sizes are in the .groups sidecar.)
-        {
-            ofstream pf((std::string(filename) + ".triangleprov").c_str(), std::ios::binary);
-            pf << "# group_id num_faces tet v0 v1 v2 ...\n";
-            pf << triangle_provenance.size() << "\n";
-            for (uint32_t g = 0; g < triangle_provenance.size(); g++) {
-                pf << g << " " << triangle_provenance[g].size();
-                for (const auto& f : triangle_provenance[g])
-                    pf << " " << f[0] << " " << vmap[f[1]] << " " << vmap[f[2]] << " " << vmap[f[3]];
-                pf << "\n";
-            }
+        // Input-surface provenance, keyed by coplanar group: per group the output tet faces
+        // tiling it, {tet, v0, v1, v2} in output vertex indices.
+        out.triangle_provenance.resize(triangle_provenance.size());
+        for (uint32_t g = 0; g < triangle_provenance.size(); g++) {
+            out.triangle_provenance[g].reserve(triangle_provenance[g].size());
+            for (const auto& f : triangle_provenance[g])
+                out.triangle_provenance[g].push_back({f[0], vmap[f[1]], vmap[f[2]], vmap[f[3]]});
         }
 
-        // Sidecar 2: the coplanar group of each input triangle, so the group areas can
-        // be reconstructed. "<num_constraints> <num_groups>" then, per real constraint,
-        // "<input_triangle_id> <coplanar_group_id>". input_triangle_id is the triangle's
-        // index in the INPUT file (degenerate/collinear input triangles are dropped by
-        // the mesher, so this is not simply 0..n-1 when the input has any).
-        {
-            ofstream gf((std::string(filename) + ".groups").c_str(), std::ios::binary);
-            gf << "# input_triangle_id coplanar_group_id\n";
-            gf << constraint_coplanar_group.size() << " " << coplanar_group_size.size() << "\n";
-            for (uint32_t c = 0; c < constraint_coplanar_group.size(); c++) {
-                const uint32_t off = constraint_original_index.empty() ? c : constraint_original_index[c];
-                gf << off << " " << constraint_coplanar_group[c] << "\n";
-            }
+        // The coplanar group of each real input constraint, keyed by its index in the INPUT
+        // (degenerate input triangles are dropped by the mesher, so this is not 0..n-1).
+        out.constraint_groups.reserve(constraint_coplanar_group.size());
+        for (uint32_t c = 0; c < constraint_coplanar_group.size(); c++) {
+            const uint32_t off =
+                constraint_original_index.empty() ? c : constraint_original_index[c];
+            out.constraint_groups.push_back({off, constraint_coplanar_group[c]});
+        }
+        out.num_coplanar_groups = (uint32_t)coplanar_group_size.size();
+
+        // Provenance of inserted edges: per input edge the output tet edges tiling it.
+        out.edge_provenance.reserve(edge_provenance.size());
+        for (const EdgeProvenance& ep : edge_provenance) {
+            VolumeOutput::EdgeProvenance oep;
+            oep.edge_id = ep.edge_id;
+            oep.out_edges.reserve(ep.out_edges.size());
+            for (const auto& oe : ep.out_edges)
+                oep.out_edges.push_back({oe[0], vmap[oe[1]], vmap[oe[2]]});
+            out.edge_provenance.push_back(std::move(oep));
         }
 
-        // Sidecar 3: provenance of inserted edges. One line per input edge:
-        // "<edge_id> <num_out_edges> <tet v0 v1> <tet v0 v1> ...", where tet is the output
-        // tet index and v0 v1 are its edge's output vertex indices (matching the .tet block).
-        // The listed output tet edges tile the input segment.
-        if (!edge_provenance.empty()) {
-            ofstream ef((std::string(filename) + ".edgeprov").c_str(), std::ios::binary);
-            ef << "# edge_id num_out_edges tet v0 v1 ...\n";
-            ef << edge_provenance.size() << "\n";
-            for (const EdgeProvenance& ep : edge_provenance) {
-                ef << ep.edge_id << " " << ep.out_edges.size();
-                for (const auto& oe : ep.out_edges)
-                    ef << " " << oe[0] << " " << vmap[oe[1]] << " " << vmap[oe[2]];
-                ef << "\n";
-            }
+        // Provenance of inserted points: the output vertex equal to each, and a tet containing
+        // it (both absent if the point did not survive).
+        out.point_provenance.reserve(point_provenance.size());
+        for (const PointProvenance& pp : point_provenance) {
+            if (pp.out_vertex == UINT32_MAX)
+                out.point_provenance.push_back({pp.point_id, UINT32_MAX, UINT32_MAX});
+            else
+                out.point_provenance.push_back({pp.point_id, pp.tet, vmap[pp.out_vertex]});
         }
 
-        // Sidecar 4: provenance of inserted points. One line per input point:
-        // "<point_id> <tet> <out_vertex>", where out_vertex is the output vertex equal to the
-        // point and tet is an output tet containing it (both -1 if the point did not survive).
-        if (!point_provenance.empty()) {
-            ofstream pf((std::string(filename) + ".pointprov").c_str(), std::ios::binary);
-            pf << "# point_id tet out_vertex(-1 -1 if absent)\n";
-            pf << point_provenance.size() << "\n";
-            for (const PointProvenance& pp : point_provenance) {
-                if (pp.out_vertex == UINT32_MAX)
-                    pf << pp.point_id << " -1 -1\n";
-                else
-                    pf << pp.point_id << " " << pp.tet << " " << vmap[pp.out_vertex] << "\n";
-            }
-        }
-
-        // Sidecar 2 (optional, for exact verification): the output vertex coordinates
-        // as exact rationals, same order/indexing as the .tet vertex block. Format per
-        // line: "<x> <y> <z>", each a rational "[-]num[/den]" (portable decimal).
+        // Optional, for exact verification: the exact rational coordinates in their portable
+        // decimal form, same order as coords.
         if (export_rational) {
-            ofstream rf((std::string(filename) + ".rational").c_str(), std::ios::binary);
-            rf << final_numver << "\n";
+            out.exact_coords.reserve(3 * num_v);
             bigrational rx, ry, rz;
             for (uint32_t v = 0; v < vertices.size(); v++)
                 if (vrts_visit[v]) {
                     vertices[v]->getExactXYZCoordinates(rx, ry, rz);
-                    rf << rational_to_string(rx) << " " << rational_to_string(ry) << " "
-                       << rational_to_string(rz) << "\n";
+                    out.exact_coords.push_back(rational_to_string(rx));
+                    out.exact_coords.push_back(rational_to_string(ry));
+                    out.exact_coords.push_back(rational_to_string(rz));
                 }
         }
+
+#ifndef NDEBUG
+        // In tetrahedralization mode, every emitted tetrahedron must have strictly
+        // positive volume. makeTetrahedra() guarantees this (it drops zero-volume
+        // tets and orients the rest positively); assert it with the exact orient3D
+        // predicate -- no floating point -- so any regression is caught immediately.
+        for (uint32_t t = 0; t < final_tets.size(); t += 4)
+            assert(genericPoint::orient3D(
+                       *vertices[final_tets[t]],
+                       *vertices[final_tets[t + 1]],
+                       *vertices[final_tets[t + 2]],
+                       *vertices[final_tets[t + 3]]) > 0 &&
+                   "extractVolume: generated tetrahedron does not have positive volume");
+#endif
+
+        final_tets.clear();
     } else {
-        size_t internal_cell_num = 0;
         std::vector<uint32_t> face_visit(faces.size(), 0);
         for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
         for (size_t i = 0; i < edge_visit.size(); i++) edge_visit[i] = 0;
+        size_t internal_cell_num = 0;
         for (BSPcell& cell : cells)
             if (cell.place == INTERNAL_A) {
                 internal_cell_num++;
@@ -3836,9 +3840,6 @@ void BSPcomplex::saveMesh(
         for (size_t e = 0; e < edges.size(); e++)
             if (edge_visit[e])
                 vrts_visit[edges[e].vertices[0]] = vrts_visit[edges[e].vertices[1]] = 1;
-        uint32_t final_numver = 0;
-        for (size_t i = 0; i < vrts_visit.size(); i++)
-            if (vrts_visit[i]) final_numver++;
 
         std::vector<uint32_t> vmap(vertices.size(), 0);
         size_t num_v = 0;
@@ -3847,104 +3848,41 @@ void BSPcomplex::saveMesh(
             if (vrts_visit[i]) num_v++;
         }
 
-        f << final_numver << " vertices\n";
-        f << internal_cell_num << " cells\n";
-        // Print vertices coordinates
+        out.coords.reserve(3 * num_v);
         for (uint32_t v = 0; v < vertices.size(); v++)
-            if (vrts_visit[v]) {
-                f << (*vertices[v]) << "\n";
-            }
+            if (vrts_visit[v]) push_coords(v);
 
-        // Print cells
+        // Cells, each as its vertex list
         for (size_t v = 0; v < vertices.size(); v++) vrts_visit[v] = 0;
         for (size_t e = 0; e < edges.size(); e++) edge_visit[e] = 0;
+        out.cell_offsets.reserve(internal_cell_num + 1);
+        out.cell_offsets.push_back(0);
         for (BSPcell& cell : cells)
             if (cell.place == INTERNAL_A) {
                 uint64_t numce = count_cellEdges(cell);
                 uint32_t numcv = count_cellVertices(cell, &numce);
                 std::vector<uint32_t> cell_vrts(numcv);
                 list_cellVertices(cell, numce, cell_vrts);
-                f << cell_vrts.size() << " ";
-                for (uint32_t i : cell_vrts) f << vmap[i] << " ";
-                f << "\n";
+                for (uint32_t i : cell_vrts) out.cell_vertices.push_back(vmap[i]);
+                out.cell_offsets.push_back((uint32_t)out.cell_vertices.size());
             }
     }
+}
 
-    f.close();
-
-#ifndef NDEBUG
-    // In tetrahedralization mode, every emitted tetrahedron must have strictly
-    // positive volume. makeTetrahedra() guarantees this (it drops zero-volume
-    // tets and orients the rest positively); assert it with the exact orient3D
-    // predicate -- no floating point -- so any regression is caught immediately.
-    if (tetrahedrize)
-        for (uint32_t t = 0; t < final_tets.size(); t += 4)
-            assert(genericPoint::orient3D(
-                       *vertices[final_tets[t]],
-                       *vertices[final_tets[t + 1]],
-                       *vertices[final_tets[t + 2]],
-                       *vertices[final_tets[t + 3]]) > 0 &&
-                   "saveMesh: generated tetrahedron does not have positive volume");
-#endif
-
-    final_tets.clear();
+void BSPcomplex::saveMesh(
+    const char* filename, const char bool_opcode, bool tetrahedrize, bool export_rational)
+{
+    VolumeOutput out;
+    extractVolume(bool_opcode, tetrahedrize, export_rational, out);
+    write_volume(filename, out);
 }
 
 
 void BSPcomplex::saveBlackFaces(const char* filename, bool triangulate)
 {
-    // Binary mode so line endings stay LF on every OS (byte-identical output).
-    ofstream f(filename, std::ios::binary);
-
-    if (!f) ip_error("BSPcomplex::saveBlackFaces: cannot open the file.\n");
-
-    if (triangulate) {
-        const uint64_t num_faces = faces.size();
-        for (uint64_t face_ind = 0; face_ind < num_faces; face_ind++) triangulateFace(face_ind);
-    }
-
-    for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
-    for (size_t i = 0; i < edges.size(); i++) edge_visit[i] = 0;
-
-    uint64_t num_border_faces = 0;
-    for (uint64_t f_i = 0; f_i < faces.size(); f_i++)
-        if (faces[f_i].colour != WHITE) {
-            num_border_faces++;
-            for (uint64_t eid : faces[f_i].edges) edge_visit[eid] = 1;
-        }
-    for (size_t i = 0; i < edges.size(); i++)
-        if (edge_visit[i]) vrts_visit[edges[i].vertices[0]] = vrts_visit[edges[i].vertices[1]] = 1;
-
-    std::vector<uint32_t> vmap(vertices.size(), 0);
-    size_t num_v = 0;
-    for (size_t i = 0; i < vrts_visit.size(); i++) {
-        vmap[i] = (uint32_t)num_v;
-        if (vrts_visit[i]) num_v++;
-    }
-
-    f << "OFF\n";
-    f << num_v << " ";
-    f << num_border_faces << " ";
-    f << "0\n";
-
-    // Print vertices coordinates
-    for (uint32_t v = 0; v < vertices.size(); v++)
-        if (vrts_visit[v]) f << (*(vertices)[v]) << "\n";
-
-    // Print border faces
-    for (uint32_t f_i = 0; f_i < faces.size(); f_i++)
-        if (faces[f_i].colour != WHITE) {
-            BSPface& face = faces[f_i];
-            vector<uint32_t> face_vrts(face.edges.size(), UINT32_MAX);
-            list_faceVertices(face, face_vrts);
-            f << face_vrts.size();
-
-            for (uint32_t v = 0; v < face_vrts.size(); v++) f << " " << vmap[face_vrts[v]];
-
-            f << "\n";
-        }
-
-    f.close();
+    SurfaceOutput out;
+    extractSurface('0', triangulate, true, out);
+    write_surface_off(filename, out);
 }
 
 

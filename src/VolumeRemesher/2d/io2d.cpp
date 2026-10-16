@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <string>
 #include <unordered_map>
 
 using namespace NFG;
@@ -91,8 +92,10 @@ bool read_OBJ_segments(const std::string& path, std::vector<double>& coords,
     return true;
 }
 
-bool write_arrangement(const std::string& base, const Arrangement2D& A, bool export_rational)
+void extract_arrangement(const Arrangement2D& A, bool export_rational, ArrangementOutput& out)
 {
+    out = ArrangementOutput();
+
     // Emit every finite triangle. That includes the ones incident to the four bounding-box
     // corners: the corners define the domain the arrangement was computed over (the 10%-expanded
     // box), so keeping them yields a clean triangulation of that whole rectangle. Only the
@@ -100,7 +103,6 @@ bool write_arrangement(const std::string& base, const Arrangement2D& A, bool exp
     // infinity -- are dropped.
     std::vector<uint32_t> vmap(A.V.size(), INVALID);
     std::vector<uint32_t> used;
-    std::vector<std::array<uint32_t, 3>> tris;
     std::vector<uint32_t> tri_id(A.num_triangles(), INVALID);
 
     for (uint32_t t = 0; t < A.num_triangles(); t++) {
@@ -114,32 +116,25 @@ bool write_arrangement(const std::string& base, const Arrangement2D& A, bool exp
             }
             tv[k] = vmap[v];
         }
-        tri_id[t] = uint32_t(tris.size());
-        tris.push_back(tv);
+        tri_id[t] = uint32_t(out.tris.size());
+        out.tris.push_back(tv);
     }
 
-    // Binary mode so line endings stay LF on every OS (byte-identical output).
-    std::ofstream f(base, std::ios::binary);
-    if (!f) return false;
-    // Full double precision: the default 6 significant figures collapses fine meshes.
-    f.precision(17);
-    f << "OFF\n" << used.size() << " " << tris.size() << " 0\n";
+    out.coords.reserve(2 * used.size());
     for (const uint32_t v : used) {
         double x = 0, y = 0;
         A.V[v]->getApproxXYCoordinates(x, y);
-        f << x << " " << y << " 0\n";
+        out.coords.push_back(x);
+        out.coords.push_back(y);
     }
-    for (const auto& t : tris) f << "3 " << t[0] << " " << t[1] << " " << t[2] << "\n";
-    f.close();
 
     if (export_rational) {
-        std::ofstream rf(base + ".rational", std::ios::binary);
-        if (!rf) return false;
-        rf << used.size() << "\n";
+        out.exact_coords.reserve(2 * used.size());
         bigrational rx, ry;
         for (const uint32_t v : used) {
             A.V[v]->getExactXYCoordinates(rx, ry);
-            rf << rational_to_string(rx) << " " << rational_to_string(ry) << "\n";
+            out.exact_coords.push_back(rational_to_string(rx));
+            out.exact_coords.push_back(rational_to_string(ry));
         }
     }
 
@@ -147,7 +142,7 @@ bool write_arrangement(const std::string& base, const Arrangement2D& A, bool exp
     // sub-edge instead would be quadratic in the mesh size. Lookup-only map; the smallest
     // triangle id wins so the reported representative is deterministic.
     std::unordered_map<uint64_t, uint32_t> edge_tri;
-    edge_tri.reserve(tris.size() * 3);
+    edge_tri.reserve(out.tris.size() * 3);
     for (uint32_t t = 0; t < A.num_triangles(); t++) {
         if (tri_id[t] == INVALID) continue;
         for (uint32_t le = 0; le < 3; le++) {
@@ -161,55 +156,94 @@ bool write_arrangement(const std::string& base, const Arrangement2D& A, bool exp
     // Segment provenance, keyed by INPUT segment id (not by the deduplicated segment), so the
     // caller can index it with the id it supplied. Duplicated segments therefore each get the
     // full edge list, and a segment dropped as zero-length gets an empty one.
+    out.segment_provenance.resize(A.input_to_seg.size());
+    for (uint32_t i = 0; i < A.input_to_seg.size(); i++) {
+        const uint32_t s = A.input_to_seg[i];
+        if (s == INVALID) continue;
+        std::vector<std::array<uint32_t, 3>>& o = out.segment_provenance[i];
+        for (uint32_t k = A.seg_head[s]; k != INVALID; k = A.subedges[k].next) {
+            const uint32_t v0 = A.subedges[k].v0, v1 = A.subedges[k].v1;
+            const auto it = edge_tri.find(Arrangement2D::ekey(v0, v1));
+            if (it == edge_tri.end()) continue;
+            o.push_back({it->second, vmap[v0], vmap[v1]});
+        }
+        // The stored segment is oriented by its FIRST input occurrence. If this input
+        // segment was given the other way round, reverse so the list runs from its own first
+        // endpoint -- otherwise each emitted (v0,v1) is backwards and a consumer
+        // parameterising along the segment sees t0 > t1. (embed2d.cpp does the same.)
+        if (A.input_seg_v0[i] != A.seg[s][0]) {
+            std::reverse(o.begin(), o.end());
+            for (auto& e : o) std::swap(e[1], e[2]);
+        }
+    }
+
+    // Point provenance: one entry per INPUT point, giving an output triangle it belongs to and
+    // its output vertex index, or INVALID twice if it did not survive.
+    out.point_provenance.reserve(A.input_point_vertex.size());
+    for (uint32_t i = 0; i < A.input_point_vertex.size(); i++) {
+        const uint32_t v = A.input_point_vertex[i];
+        const uint32_t ov = (v != INVALID) ? vmap[v] : INVALID;
+        const uint32_t t = (v != INVALID) ? A.vert_tri[v] : INVALID;
+        const uint32_t ot = (t != INVALID) ? tri_id[t] : INVALID;
+        if (ov == INVALID || ot == INVALID)
+            out.point_provenance.push_back({INVALID, INVALID});
+        else
+            out.point_provenance.push_back({ot, ov});
+    }
+}
+
+bool write_arrangement(const std::string& base, const ArrangementOutput& out)
+{
+    // Binary mode so line endings stay LF on every OS (byte-identical output).
+    std::ofstream f(base, std::ios::binary);
+    if (!f) return false;
+    // Full double precision: the default 6 significant figures collapses fine meshes.
+    f.precision(17);
+    f << "OFF\n" << out.num_vertices() << " " << out.tris.size() << " 0\n";
+    for (uint64_t v = 0; v < out.num_vertices(); v++)
+        f << out.coords[2 * v] << " " << out.coords[2 * v + 1] << " 0\n";
+    for (const auto& t : out.tris) f << "3 " << t[0] << " " << t[1] << " " << t[2] << "\n";
+    f.close();
+
+    if (!out.exact_coords.empty()) {
+        std::ofstream rf(base + ".rational", std::ios::binary);
+        if (!rf) return false;
+        rf << out.num_vertices() << "\n";
+        for (uint64_t v = 0; v < out.num_vertices(); v++)
+            rf << out.exact_coords[2 * v] << " " << out.exact_coords[2 * v + 1] << "\n";
+    }
+
     {
         std::ofstream pf(base + ".segmentprov", std::ios::binary);
         if (!pf) return false;
-        pf << A.input_to_seg.size() << "\n";
-        for (uint32_t i = 0; i < A.input_to_seg.size(); i++) {
-            const uint32_t s = A.input_to_seg[i];
-            pf << i;
-            if (s == INVALID) {
-                pf << " 0\n";
-                continue;
-            }
-            std::vector<std::array<uint32_t, 3>> out;
-            for (uint32_t k = A.seg_head[s]; k != INVALID; k = A.subedges[k].next) {
-                const uint32_t v0 = A.subedges[k].v0, v1 = A.subedges[k].v1;
-                const auto it = edge_tri.find(Arrangement2D::ekey(v0, v1));
-                if (it == edge_tri.end()) continue;
-                out.push_back({it->second, vmap[v0], vmap[v1]});
-            }
-            // The stored segment is oriented by its FIRST input occurrence. If this input
-            // segment was given the other way round, reverse so the list runs from its own first
-            // endpoint -- otherwise each emitted (v0,v1) is backwards and a consumer
-            // parameterising along the segment sees t0 > t1. (embed2d.cpp does the same.)
-            if (A.input_seg_v0[i] != A.seg[s][0]) {
-                std::reverse(out.begin(), out.end());
-                for (auto& e : out) std::swap(e[1], e[2]);
-            }
-            pf << " " << out.size();
-            for (const auto& e : out) pf << " " << e[0] << " " << e[1] << " " << e[2];
+        pf << out.segment_provenance.size() << "\n";
+        for (uint32_t i = 0; i < out.segment_provenance.size(); i++) {
+            const auto& o = out.segment_provenance[i];
+            pf << i << " " << o.size();
+            for (const auto& e : o) pf << " " << e[0] << " " << e[1] << " " << e[2];
             pf << "\n";
         }
     }
 
-    // Point provenance: one line per INPUT point, giving an output triangle it belongs to and its
-    // output vertex index, or "-1 -1" if it did not survive.
     {
         std::ofstream pf(base + ".pointprov", std::ios::binary);
         if (!pf) return false;
-        pf << A.input_point_vertex.size() << "\n";
-        for (uint32_t i = 0; i < A.input_point_vertex.size(); i++) {
-            const uint32_t v = A.input_point_vertex[i];
-            const uint32_t ov = (v != INVALID) ? vmap[v] : INVALID;
-            const uint32_t t = (v != INVALID) ? A.vert_tri[v] : INVALID;
-            const uint32_t ot = (t != INVALID) ? tri_id[t] : INVALID;
-            if (ov == INVALID || ot == INVALID) pf << i << " -1 -1\n";
-            else pf << i << " " << ot << " " << ov << "\n";
+        pf << out.point_provenance.size() << "\n";
+        for (uint32_t i = 0; i < out.point_provenance.size(); i++) {
+            const auto& pp = out.point_provenance[i];
+            if (pp[0] == INVALID || pp[1] == INVALID) pf << i << " -1 -1\n";
+            else pf << i << " " << pp[0] << " " << pp[1] << "\n";
         }
     }
 
     return true;
+}
+
+bool write_arrangement(const std::string& base, const Arrangement2D& A, bool export_rational)
+{
+    ArrangementOutput out;
+    extract_arrangement(A, export_rational, out);
+    return write_arrangement(base, out);
 }
 
 } // namespace vr2d

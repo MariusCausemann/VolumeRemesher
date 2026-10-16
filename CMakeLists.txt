@@ -28,6 +28,12 @@ set (SOURCES
     src/VolumeRemesher/inOutPartition.cpp
     src/VolumeRemesher/parallel.h
     src/VolumeRemesher/exact_coords.h
+    src/VolumeRemesher/io.h
+    src/VolumeRemesher/io.cpp
+    src/VolumeRemesher/mesh_output.h
+    src/VolumeRemesher/mesh_output.cpp
+    src/VolumeRemesher/driver.h
+    src/VolumeRemesher/driver.cpp
     # 2D pipeline: segment arrangement -> triangles
     src/VolumeRemesher/2d/predicates2d.h
     src/VolumeRemesher/2d/predicates2d.cpp
@@ -153,13 +159,16 @@ else()
 	# NFG:: with it, and a layout mismatch swaps interval bounds across the link), and
 	# MarcoAttene/NFG#5 adds bignatural::trimMemoryPool(), which lets a caller return the
 	# memory the thread-local bignatural pool grew into during an arrangement -- plus
-	# wildmeshing/NFG's danielepanozzo/ip-error-exit-failure: ip_error exits with a failure
+	# wildmeshing/NFG's danielepanozzo/ip-error-throws: ip_error exits with a failure
 	# status instead of 0, so ctest sees a test that trips it as failed (proposed upstream
-	# as MarcoAttene/NFG#6). Back to upstream once that is merged there. fast-envelope pins
-	# NFG too: see its cmake/recipes/ipred.cmake.
+	# as MarcoAttene/NFG#6), and with NFG_IP_ERROR_THROWS defined it throws a
+	# std::runtime_error instead of exiting at all, which the Python module needs so a bad
+	# input becomes an exception rather than the end of the interpreter (MarcoAttene/NFG#7).
+	# Back to upstream once those are merged there. fast-envelope pins NFG too: see its
+	# cmake/recipes/ipred.cmake.
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/wildmeshing/NFG.git
-		GIT_TAG a35198dc5762906f598ba77fc253d87cb8860f21
+		GIT_TAG 233026759ead5a2638e951ee7df54b5e484a8e00
 		SOURCE_SUBDIR do-not-configure
 	)
 
