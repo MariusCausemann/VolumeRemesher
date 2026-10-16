@@ -367,6 +367,10 @@ From Python, see [Python](#python). From C++, the whole command line pipeline is
 
 To embed a set of triangles (and, optionally, edges and points) into an existing tetrahedral mesh from C++, see `embed.h` (`embed_tri_in_poly_mesh`). It returns the polyhedral/tetrahedral output plus the same provenance information described above (faces on input, and per-edge / per-point provenance). Note: in the embedding path the edges/points — and the small helper-triangle apexes they generate — must lie inside the input tet mesh's domain (a debug assertion flags violations).
 
+## License
+
+LGPL-3.0-or-later; see [LICENSE](LICENSE). (The default build, `LGPL ON` in CMakeLists.txt, uses only LGPL-compatible components.)
+
 ## Notes
 
 * The pipeline uses exact indirect predicates, so the output is deterministic and byte-identical across platforms/compilers (this is checked in the integration tests), and identical between the command line tool and the Python package (checked by `tests/python`).
