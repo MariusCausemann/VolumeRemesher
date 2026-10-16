@@ -83,7 +83,46 @@ arr.vertices, arr.triangles, arr.segment_provenance
 arr.save("triangulation.off")   # + .segmentprov, .pointprov
 ```
 
-Arrays work wherever a path does: `vr.remesh((vertices, triangles), ...)`, `edges=(edge_vertices, edge_pairs)`, `points=point_array`, `vr.embed(surface, (tet_vertices, tets))`, `vr.arrange_2d((points_2d, segment_pairs))`. The readers are available on their own (`vr.read_off`, `vr.read_edges_off`, `vr.read_points_off`, `vr.read_tet_mesh`, `vr.read_obj_segments`) and parse exactly as the tool does.
+### Working with arrays
+
+Arrays work wherever a path does: `vr.remesh((vertices, triangles), ...)`, `edges=(edge_vertices, edge_pairs)`, `points=point_array`, `vr.embed(surface, (tet_vertices, tets))`, `vr.arrange_2d((points_2d, segment_pairs))`. Coordinates are float64 `(n, 3)` (or `(n, 2)` in 2D) and indices any integer array, `(m, 3)` for triangles, `(m, 4)` for tets, `(m, 2)` for edges and segments. The readers are available on their own (`vr.read_off`, `vr.read_edges_off`, `vr.read_points_off`, `vr.read_tet_mesh`, `vr.read_obj_segments`) and parse exactly as the tool does.
+
+The arrangement of two crossing segments, the diagonals of the square `[0,2]²`, from arrays:
+
+```python
+import numpy as np
+import volume_remesher as vr
+
+points = np.array([[0.0, 0.0], [2.0, 2.0], [0.0, 2.0], [2.0, 0.0]])
+segments = np.array([[0, 1], [2, 3]])          # (0,0)-(2,2) and (0,2)-(2,0)
+
+arr = vr.arrange_2d((points, segments), exact=True)
+arr                       # Arrangement(9 vertices, 12 triangles)
+arr.vertices              # (9, 2): the 4 input points, the crossing at (1, 1), and the
+                          #         4 corners of the bounding box expanded by 10%
+arr.triangles             # (12, 3) uint32, counterclockwise
+arr.exact_vertices[1]     # (Fraction(1, 1), Fraction(1, 1)): the crossing, exactly
+
+# Each input segment is exactly the union of output edges, in order from its first endpoint:
+arr.segment_provenance[0] # [[2 4 1]      triangle 2 has edge (4, 1): (0,0) -> (1,1)
+                          #  [0 1 2]]     triangle 0 has edge (1, 2): (1,1) -> (2,2)
+arr.point_provenance      # (4, 2): for each input point, a triangle containing it and its
+                          #         output vertex index
+arr.save("x.off")         # the same OFF (+ .segmentprov, .pointprov, .rational) as the tool
+```
+
+And a 3D example, the tetrahedral mesh of a unit cube given as arrays, then its union with a shifted copy:
+
+```python
+V = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+              [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], dtype=float)
+F = np.array([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+              [2, 3, 7], [2, 7, 6], [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3]])
+
+mesh = vr.remesh((V, F), tetrahedralize=True)          # VolumeMesh(8 vertices, 6 tets)
+both = vr.boolean((V, F), (V + 0.5, F), "union", tetrahedralize=True)   # VolumeMesh(22 vertices, 42 tets)
+both.vertices, both.tets                                # numpy arrays, ready for your own pipeline
+```
 
 | Function | Command line | Returns |
 | --- | --- | --- |
