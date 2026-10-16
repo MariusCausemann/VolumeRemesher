@@ -9,6 +9,7 @@ This fork adds, on top of the original algorithm:
 * **Exact surface tracking.** For each output element you can recover which input primitive it came from: output faces &rarr; input triangles, output edges &rarr; input edges, output vertices &rarr; input points — see [Tracking output back to the input](#tracking-output-back-to-the-input).
 * **Embedding a surface (and edges/points) in an existing tetrahedral mesh**, programmatically via `embed.h`.
 * **A 2D mode** (`-2d`): the arrangement of a soup of 2D segments, output as a triangulation with the same kind of exact provenance — see [2D mode](#2d-mode).
+* **Python bindings** (`pip install volume-remesher`): every option of the command line tool as a function, with numpy arrays in and out and files that are byte-identical to the tool's — see [Python](#python).
 
 ## Building
 
@@ -21,6 +22,89 @@ cd build
 cmake ..
 ```
 This produces a build configuration for your system (a `mesh_generator.sln` on Windows/MSVC, a `Makefile` on Linux/macOS). Build the `mesh_generator` target as usual. The integration tests are built by default (`VOLUMEREMESHER_BUILD_TESTS=ON`) — run them with `ctest`, or configure with `-DVOLUMEREMESHER_BUILD_TESTS=OFF` to skip them. (Some heavy tracking tests only run in a Release build.)
+
+## Python
+
+### Installation
+
+Wheels for Linux (x86-64, aarch64), macOS (Apple Silicon) and Windows (x64), for CPython 3.9 and later:
+
+```
+pip install volume-remesher
+```
+
+The x86-64 wheels are compiled with AVX2/FMA, like the command line tool: they need a CPU from 2013 or later (Intel Haswell, AMD Excavator). On an older CPU, or on another platform, build from source instead; this needs a C++20 compiler and CMake 3.25 (both are what the tool itself needs), and compiles the same code with the same flags:
+
+```
+pip install git+https://github.com/wildmeshing/VolumeRemesher   # or, from a checkout: pip install .
+```
+
+To work on the package in-tree, configure CMake with `-DVOLUMEREMESHER_BUILD_PYTHON=ON` (after `pip install nanobind numpy`): the module is placed in `python/volume_remesher/`, and `PYTHONPATH=python python -m pytest tests/python` runs the Python test suite against the `mesh_generator` of the same build.
+
+### Usage
+
+Every input is a path or numpy arrays; every result is a frozen dataclass of numpy arrays with a `save()` that writes **exactly the bytes `mesh_generator` writes** (the test suite checks this on every model and option):
+
+```python
+import volume_remesher as vr
+
+# 1) Volume mesh (polyhedral) of a closed surface      mesh_generator models/bunny.off
+mesh = vr.remesh("models/bunny.off")
+mesh.vertices            # (n, 3) float64
+mesh.cells               # the polyhedral cells, each a list of vertex indices
+mesh.save("volume.msh")
+
+# 2) Tetrahedral mesh of the enclosed solid            mesh_generator models/bunny.off -t
+mesh = vr.remesh("models/bunny.off", tetrahedralize=True)
+mesh.tets                # (m, 4) uint32
+mesh.save("volume.tet")  # + volume.tet.triangleprov, volume.tet.groups
+
+# 3) Boolean union of two overlapping surfaces         mesh_generator cube_subdiv.off U sphere.off
+mesh = vr.boolean("models/cube_subdiv.off", "models/sphere.off", "union")   # or "intersection", "difference"
+
+# 4) Exact surface tracking of a tetrahedralization    mesh_generator cube_subdiv.off -t -r -a
+mesh = vr.remesh("models/cube_subdiv.off", tetrahedralize=True, exact=True, keep_all_cells=True)
+mesh.exact_vertices      # list of (Fraction, Fraction, Fraction): the exact positions
+mesh.triangle_provenance # per coplanar group of input triangles, the {tet, v0, v1, v2} faces tiling it
+mesh.constraint_groups   # (c, 2): input triangle -> coplanar group
+
+# 5) Insert edges and points, with tracking            mesh_generator sphere.off -t -r -a -e ... -p ...
+mesh = vr.remesh("models/sphere.off", edges="models/sphere_edges.off", points="models/sphere_points.off",
+                 tetrahedralize=True, exact=True, keep_all_cells=True)
+mesh.edge_provenance[i]  # the {tet, v0, v1} output edges tiling input edge mesh.edge_ids[i]
+mesh.point_provenance    # (p, 3): {point_id, tet, output vertex}, -1 where the point did not survive
+
+# 6) Embed a surface into an existing tetrahedral mesh  mesh_generator surface.off U mesh.tet
+mesh = vr.embed("models/Octocat.off", "models/Octocat.bg.tet", tetrahedralize=True)
+
+# 7) 2D: arrangement of a segment soup                 mesh_generator models/2d/england.obj -2d
+arr = vr.arrange_2d("models/2d/england.obj")
+arr.vertices, arr.triangles, arr.segment_provenance
+arr.save("triangulation.off")   # + .segmentprov, .pointprov
+```
+
+Arrays work wherever a path does: `vr.remesh((vertices, triangles), ...)`, `edges=(edge_vertices, edge_pairs)`, `points=point_array`, `vr.embed(surface, (tet_vertices, tets))`, `vr.arrange_2d((points_2d, segment_pairs))`. The readers are available on their own (`vr.read_off`, `vr.read_edges_off`, `vr.read_points_off`, `vr.read_tet_mesh`, `vr.read_obj_segments`) and parse exactly as the tool does.
+
+| Function | Command line | Returns |
+| --- | --- | --- |
+| `remesh(surface, *, edges, points, tetrahedralize, keep_all_cells, fill_holes, exact, output, verbose, log)` | `mesh_generator A.off [-e] [-p] [-t] [-a] [-f] [-r] [-s\|-b] [-v] [-l]` | `VolumeMesh`, or `SurfaceMesh` for `output="skin"` (`-s`) / `"black_faces"` (`-b`) |
+| `boolean(a, b, op, ...)` | `mesh_generator A.off {U\|I\|D} B.off ...` | same |
+| `embed(surface, tet_mesh, *, edges, points, tetrahedralize, exact, output, verbose)` | `mesh_generator A.off U B.tet ...` | same |
+| `arrange_2d(segments, *, exact, verbose)` | `mesh_generator soup.obj -2d [-r]` | `Arrangement` |
+| `embed_exact(surface, tet_mesh, *, edges, points)` | C++ `embed_tri_in_poly_mesh` | `PolyhedralEmbedding`: exact vertices, polyhedral facets and cells, tets, full provenance |
+| `arrange_2d_exact(segments)` | C++ `embed_seg_in_tri_mesh` | `SegmentEmbedding`: exact vertices, triangles, provenance |
+
+Errors — a missing or malformed file, a vertex outside the tet mesh, an input that cannot be meshed — raise `vr.VolumeRemesherError` with the tool's message; the interpreter is never terminated. The pipeline runs on its own thread with the GIL released, and its floating point rounding mode never leaks into the calling thread. Progress output (`verbose=True`) goes to the C standard output, as in the tool; `log=True` appends to `mesh_generator.log` in the working directory.
+
+### The command line, in Python
+
+`python -m volume_remesher` (also installed as `volume-remesher`) takes `mesh_generator`'s exact arguments and writes its exact files, with the same exit status and messages:
+
+```
+python -m volume_remesher models/bunny.off -t -r      # == mesh_generator models/bunny.off -t -r
+```
+
+Performance is that of the tool: the same compiled code runs, and the Python side only copies the result into its arrays (on the bundled models, `tests/python/bench.py` measures the Python call at 0.95-1.0x the tool's wall time, slightly less without the file write).
 
 ## Command-line usage
 
@@ -161,7 +245,7 @@ mesh_generator models/sphere.off -t -r -a \
 # 6) Embed a surface into an existing tetrahedral mesh (.tet/.msh as inputfile_B).
 #    The bool_opcode (here U) is a required separator and is ignored for embedding;
 #    the surface must lie inside the tet mesh's domain.
-mesh_generator surface.off U input_tetmesh.tet        # -> volume.msh
+mesh_generator models/Octocat.off U models/Octocat.bg.tet  # -> volume.msh (MEDIT: models/Octocat_medit.msh)
 
 # 7) 2D: arrangement of a segment soup (see "2D mode" below)
 mesh_generator models/2d/england.obj -2d              # -> triangulation.off
@@ -240,11 +324,13 @@ output triangles, exact rational vertex coordinates, and the segment and point p
 
 ## Programmatic API
 
+From Python, see [Python](#python). From C++, the whole command line pipeline is `driver.h` (`make_mesh`, `embed_mesh`, `arrange_2d`, with the readers in `io.h` and the output snapshots and writers in `mesh_output.h`); `main.cpp` is a thin parser over it.
+
 To embed a set of triangles (and, optionally, edges and points) into an existing tetrahedral mesh from C++, see `embed.h` (`embed_tri_in_poly_mesh`). It returns the polyhedral/tetrahedral output plus the same provenance information described above (faces on input, and per-edge / per-point provenance). Note: in the embedding path the edges/points — and the small helper-triangle apexes they generate — must lie inside the input tet mesh's domain (a debug assertion flags violations).
 
 ## Notes
 
-* The pipeline uses exact indirect predicates, so the output is deterministic and byte-identical across platforms/compilers (this is checked in the integration tests).
+* The pipeline uses exact indirect predicates, so the output is deterministic and byte-identical across platforms/compilers (this is checked in the integration tests), and identical between the command line tool and the Python package (checked by `tests/python`).
 
 * We tested this code on macOS and Windows; it should also work on Linux.
 
