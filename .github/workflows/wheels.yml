@@ -96,7 +96,9 @@ jobs:
           merge-multiple: true
       - name: Install the abi3 wheel
         shell: bash
-        run: python -m pip install pytest --only-binary=:all: --no-index --find-links wheelhouse volume-remesher || python -m pip install pytest && python -m pip install --no-index --find-links wheelhouse volume-remesher
+        run: |
+          python -m pip install pytest numpy
+          python -m pip install --no-index --no-deps --find-links wheelhouse volume-remesher
       - name: Test
         shell: bash
         run: python -m pytest -q tests/python -m "not large and not slow and not needs_cli"

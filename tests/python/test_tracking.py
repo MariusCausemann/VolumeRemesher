@@ -63,8 +63,8 @@ def write_random_points(path: Path, n: int, seed: int):
     P = g.uniform(0.05, 0.95, size=(n, 3))
     with open(path, "w") as f:
         f.write(f"OFF\n{n} 0 0\n")
-        for p in P:
-            f.write(f"{p[0]!r} {p[1]!r} {p[2]!r}\n")
+        for p in P.tolist():
+            f.write(f"{p[0]:.17g} {p[1]:.17g} {p[2]:.17g}\n")
 
 
 def write_random_edges(path: Path, n: int, seed: int):
@@ -73,8 +73,8 @@ def write_random_edges(path: Path, n: int, seed: int):
     B = A + g.uniform(-0.03, 0.03, size=(n, 3))
     with open(path, "w") as f:
         f.write(f"OFF\n{2 * n} {n} 0\n")
-        for a, b in zip(A, B):
-            f.write(f"{a[0]!r} {a[1]!r} {a[2]!r}\n{b[0]!r} {b[1]!r} {b[2]!r}\n")
+        for a, b in zip(A.tolist(), B.tolist()):
+            f.write(f"{a[0]:.17g} {a[1]:.17g} {a[2]:.17g}\n{b[0]:.17g} {b[1]:.17g} {b[2]:.17g}\n")
         for i in range(n):
             f.write(f"2 {2 * i} {2 * i + 1}\n")
 
@@ -85,9 +85,9 @@ def extract_edges_off(model_path: Path, out: Path):
     E = np.unique(np.sort(E, axis=1), axis=0)
     with open(out, "w") as f:
         f.write(f"OFF\n{len(V)} {len(E)} 0\n")
-        for v in V:
-            f.write(f"{v[0]!r} {v[1]!r} {v[2]!r}\n")
-        for a, b in E:
+        for v in V.tolist():
+            f.write(f"{v[0]:.17g} {v[1]:.17g} {v[2]:.17g}\n")
+        for a, b in E.tolist():
             f.write(f"2 {a} {b}\n")
 
 
