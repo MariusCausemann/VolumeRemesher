@@ -178,15 +178,24 @@ else()
 		SOURCE_SUBDIR do-not-configure
 	)
 
-	# Delaunay3D: upstream main 8361b9a plus wildmeshing/Delaunay3D's
-	# danielepanozzo/orphan-inc-tet-point-search (proposed upstream as
-	# MarcoAttene/Delaunay3D#2): insertExistingVertexNonDelaunay marks a vertex it evicts
-	# (a coincident copy) as isolated instead of leaving its inc_tet stale, VT() guards
-	# against such a vertex, and searchTetrahedron takes a point as well as a vertex id
-	# (locate_point relies on it). Back to upstream once that is merged there.
+	# Delaunay3D: wildmeshing/Delaunay3D's danielepanozzo/integration, which is upstream
+	# main e18e96a plus two branches proposed upstream:
+	#   - danielepanozzo/orphan-inc-tet-point-search (MarcoAttene/Delaunay3D#2):
+	#     insertExistingVertexNonDelaunay marks a vertex it evicts (a coincident copy) as
+	#     isolated instead of leaving its inc_tet stale, VT() guards against such a vertex,
+	#     and searchTetrahedron takes a point as well as a vertex id (locate_point relies on it).
+	#   - danielepanozzo/morton-tie-break (MarcoAttene/Delaunay3D#3): upstream 2d0279a inserts
+	#     the vertices of tetrahedrize() in Morton order above 1150 of them, sorting by the code
+	#     alone; std::sort leaves points that share a grid cell in a library-dependent order, so
+	#     the tets came out in a different order on each platform. Ties now go by vertex index.
+	# The Morton order changes the order tetrahedrize() creates tets in, not which tets it
+	# creates (symbolic perturbation makes the set order-independent), so it moves the
+	# reference hashes of every model above 1150 vertices. embed_tri_in_poly_mesh never calls
+	# tetrahedrize() -- it inserts into the caller's tet mesh -- and is unaffected.
+	# Back to upstream once both are merged there.
 	FetchContent_Declare(Delaunay3D
 		GIT_REPOSITORY https://github.com/wildmeshing/Delaunay3D.git
-		GIT_TAG c9b3eec9fc794df64597e9652ce162ba819f2937
+		GIT_TAG f1c7c195599eb9c155df9422ede16f13f3dcb50b
 		SOURCE_SUBDIR do-not-configure
 	)
 
