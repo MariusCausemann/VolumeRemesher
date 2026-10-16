@@ -1,7 +1,8 @@
 """tests/embed_regression.cpp: embed_tri_in_poly_mesh on the replay capture of tetwild's call for
 Thingi10K model 100727 must emit positively oriented tets only. Hidden behind the `slow` marker:
 the embedding takes about 4 minutes and the exact check of the ~6M tets the float filter cannot
-decide another 8 (12M tets, 1.9M vertices; measured on an M3 Max). Run with `pytest -m slow`."""
+decide another 10 or so (12M tets, 1.9M vertices; 17 minutes in all on a loaded M3 Max). Run with
+`pytest -m slow`."""
 
 from __future__ import annotations
 
