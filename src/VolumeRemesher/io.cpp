@@ -52,7 +52,7 @@ TriMeshData read_OFF(const char* filename, bool verbose)
     // Check OFF mark (1st line).
     char file_ext_read[3];
     char file_ext_target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", file_ext_read) == 0)
+    if (fscanf(file, "%3c", file_ext_read) != 1)
         ip_error("read_OFF_file: FATAL ERROR "
                  "cannot read 1st line of input file\n");
 
@@ -64,7 +64,7 @@ TriMeshData read_OFF(const char* filename, bool verbose)
     // Reading number of points and triangles (skipping any comment lines).
     off_skip_comments(file);
     uint32_t npts = 0, ntri = 0;
-    if (fscanf(file, " %d %d %*d ", &npts, &ntri) == 0)
+    if (fscanf(file, " %d %d %*d ", &npts, &ntri) != 2)
         ip_error("read_OFF_file: FATAL ERROR 2st line of "
                  "input file do not contanins point and triangles numbers.\n");
 
@@ -78,7 +78,7 @@ TriMeshData read_OFF(const char* filename, bool verbose)
     for (uint32_t i = 0; i < npts; i++) {
         if (fscanf(
                 file, " %lf %lf %lf ", &m.coords[i * 3], &m.coords[i * 3 + 1],
-                &m.coords[i * 3 + 2]) == 0)
+                &m.coords[i * 3 + 2]) != 3)
             ip_error("error reading input file\n");
     }
 
@@ -86,7 +86,7 @@ TriMeshData read_OFF(const char* filename, bool verbose)
     for (uint32_t i = 0; i < ntri; i++) {
         if (fscanf(
                 file, " %u %u %u %u ", &nv, &m.tris[i * 3], &m.tris[i * 3 + 1],
-                &m.tris[i * 3 + 2]) == 0)
+                &m.tris[i * 3 + 2]) != 4)
             ip_error("error reading input file\n");
         if (nv != 3) ip_error("Non-triangular faces not supported\n");
     }
@@ -101,7 +101,7 @@ EdgeData read_edge_OFF(const char* filename, bool verbose)
 
     char ext[3];
     const char target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", ext) == 0) ip_error("read_edge_OFF: cannot read 1st line\n");
+    if (fscanf(file, "%3c", ext) != 1) ip_error("read_edge_OFF: cannot read 1st line\n");
     for (uint32_t i = 0; i < 3; i++)
         if (ext[i] != target[i]) ip_error("read_edge_OFF: 1st line is not OFF\n");
 
@@ -136,7 +136,7 @@ PointData read_points_OFF(const char* filename, bool verbose)
 
     char ext[3];
     const char target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", ext) == 0) ip_error("read_points_OFF: cannot read 1st line\n");
+    if (fscanf(file, "%3c", ext) != 1) ip_error("read_points_OFF: cannot read 1st line\n");
     for (uint32_t i = 0; i < 3; i++)
         if (ext[i] != target[i]) ip_error("read_points_OFF: 1st line is not OFF\n");
 
@@ -163,9 +163,9 @@ TetMeshData read_TET(const char* filename, bool verbose)
     FileCloser closer{file};
 
     uint32_t nv, nt;
-    if (!fscanf(file, "%d vertices\n", &nv))
+    if (fscanf(file, "%d vertices\n", &nv) != 1)
         ip_error("read_TET_file: FATAL ERROR\ncannot read 1st line of input file\n");
-    if (!fscanf(file, "%d tets\n", &nt))
+    if (fscanf(file, "%d tets\n", &nt) != 1)
         ip_error("read_TET_file: FATAL ERROR\ncannot read 2nd line of input file\n");
 
     if (verbose) printf("file %s contains %u vertices and %u tetrahedra\n", filename, nv, nt);
@@ -195,12 +195,14 @@ TetMeshData read_MEDIT(const char* filename, bool verbose)
 
     char line[1024];
     do {
-        if (!fscanf(file, "%1023s\n", line))
+        // != 1, not !: fscanf returns EOF (-1) at the end of a file without the keyword, and
+        // `!` on that is false, so the loop never ended on a file in another format (gmsh .msh).
+        if (fscanf(file, "%1023s", line) != 1)
             ip_error("read_MEDIT_file: Could not find Vertices keyword\n");
     } while (strcmp(line, "Vertices"));
 
     int dummy, nv = 0;
-    if (!fscanf(file, "%d\n", &nv)) ip_error("read_MEDIT_file: Could not read num vertices\n");
+    if (fscanf(file, "%d\n", &nv) != 1) ip_error("read_MEDIT_file: Could not read num vertices\n");
     if (verbose) printf("Reading %d vertices\n", nv);
 
     TetMeshData m;
@@ -212,9 +214,9 @@ TetMeshData read_MEDIT(const char* filename, bool verbose)
     }
 
     int nt;
-    if (!fscanf(file, "%1023s\n", line) || strcmp(line, "Tetrahedra"))
+    if (fscanf(file, "%1023s", line) != 1 || strcmp(line, "Tetrahedra"))
         ip_error("read_MEDIT_file: Could not find Tetrahedra keyword\n");
-    if (!fscanf(file, "%d\n", &nt)) ip_error("read_MEDIT_file: Could not read num tet\n");
+    if (fscanf(file, "%d\n", &nt) != 1) ip_error("read_MEDIT_file: Could not read num tet\n");
     if (verbose) printf("Reading %d tetrahedra\n", nt);
 
     m.tets.resize(size_t(4) * nt);

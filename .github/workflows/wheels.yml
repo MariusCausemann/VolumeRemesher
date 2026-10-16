@@ -1,0 +1,119 @@
+# Build the volume-remesher wheels and sdist, and publish them to PyPI on a version tag.
+#
+# Every push of a `v*` tag builds for every platform and publishes through PyPI's trusted
+# publishing (no token: the `pypi` environment must be registered as a trusted publisher of the
+# project on pypi.org). A pull request that touches the package or a manual dispatch runs the same
+# build without publishing, so a packaging change is checked before it is released.
+#
+# Wheels: CPython 3.9-3.11 per version, plus one stable-ABI (abi3) wheel from 3.12 that serves
+# every later interpreter; Linux x86-64 and aarch64 (manylinux_2_28, on native runners), macOS
+# arm64, Windows x64. x86-64 wheels are compiled with AVX2/FMA like the command line tool.
+
+name: Wheels
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "python/**"
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/wheels.yml"
+  workflow_dispatch:
+
+jobs:
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # setuptools-scm reads the version from the tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist
+        run: pipx run build --sdist
+      - name: Check metadata
+        run: pipx run twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  wheels:
+    name: wheels (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: ubuntu-24.04-arm
+            name: linux-aarch64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-2022
+            name: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        run: |
+          python -m pip install cibuildwheel==4.3.1
+          python -m cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  # The abi3 wheel built on 3.12 must import and work on the newer interpreters too.
+  abi3-check:
+    name: abi3 wheel on Python ${{ matrix.python }} (${{ matrix.os }})
+    needs: wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: wheelhouse
+          merge-multiple: true
+      - name: Install the abi3 wheel
+        shell: bash
+        run: python -m pip install pytest --only-binary=:all: --no-index --find-links wheelhouse volume-remesher || python -m pip install pytest && python -m pip install --no-index --find-links wheelhouse volume-remesher
+      - name: Test
+        shell: bash
+        run: python -m pytest -q tests/python -m "not large and not slow and not needs_cli"
+
+  publish:
+    name: publish to PyPI
+    needs: [sdist, wheels, abi3-check]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List
+        run: ls -l dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -34,18 +34,35 @@ jobs:
         with:
           fetch-depth: 10
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build and test dependencies
+        run: python -m pip install nanobind numpy pytest
+
+      # The Python module is built in the same tree, so its tests can compare its output
+      # byte for byte with the mesh_generator built here.
       - name: Configure
         run: |
           mkdir -p build
           cd build
           cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
+            -DVOLUMEREMESHER_BUILD_PYTHON=ON \
+            -DPython_EXECUTABLE=$(which python)
 
       - name: Build
         run: cd build; make -j2
 
       - name: Integration tests
         run: cd build && ctest --output-on-failure
+
+      # Release only: the Python suite runs the whole model set, which a Debug build takes far
+      # too long over (ctest already covers Debug through mesh_generator).
+      - name: Python tests
+        if: matrix.config == 'Release'
+        run: VRTEST_BUILD_DIR=build PYTHONPATH=python python -m pytest tests/python -q
 
 
   ####################
@@ -71,18 +88,31 @@ jobs:
         with:
           fetch-depth: 10
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build and test dependencies
+        run: python -m pip install nanobind numpy pytest
+
       - name: Configure
         run: |
           mkdir -p build
           cd build
           cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
+            -DVOLUMEREMESHER_BUILD_PYTHON=ON \
+            -DPython_EXECUTABLE=$(which python)
 
       - name: Build
         run: cd build; make -j3
 
       - name: Integration tests
         run: cd build && ctest --output-on-failure
+
+      - name: Python tests
+        if: matrix.config == 'Release'
+        run: VRTEST_BUILD_DIR=build PYTHONPATH=python python -m pytest tests/python -q
 
   ####################
   # Windows
@@ -103,12 +133,22 @@ jobs:
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build and test dependencies
+        run: python -m pip install nanobind numpy pytest
+
+      # The Python module only in Release: a Debug module would link against the debug Python
+      # library, which the runner's Python does not ship.
       - name: Configure and Build
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
           cmake -G Ninja ^
             -DCMAKE_BUILD_TYPE=${{ matrix.config }} ^
+            -DVOLUMEREMESHER_BUILD_PYTHON=${{ matrix.config == 'Release' && 'ON' || 'OFF' }} ^
             -B build ^
             -S .
           cmake --build build -j1
@@ -117,3 +157,11 @@ jobs:
         run: |
           cd build
           ctest --output-on-failure
+
+      - name: Python tests
+        if: matrix.config == 'Release'
+        shell: cmd
+        run: |
+          set VRTEST_BUILD_DIR=build
+          set PYTHONPATH=python
+          python -m pytest tests/python -q
