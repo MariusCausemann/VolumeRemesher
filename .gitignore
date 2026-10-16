@@ -1,6 +1,7 @@
 build
 build-*
-bin*
+/bin/
+/bin-*/
 .venv
 __pycache__/
 
