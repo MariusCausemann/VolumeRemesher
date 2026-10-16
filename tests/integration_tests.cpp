@@ -32,7 +32,23 @@
 
 namespace fs = std::filesystem;
 
+#ifdef _WIN32
+#include <process.h>
+#define VRTEST_GETPID _getpid
+#else
+#include <unistd.h>
+#define VRTEST_GETPID getpid
+#endif
+
 namespace {
+
+// A private scratch directory. Includes the pid: ctest -j runs the test cases as separate
+// processes, and two of them (the combination tests) share run_combo and would otherwise build
+// the same path, each deleting the other's work.
+fs::path work_dir(const char* prefix, int counter) {
+    return fs::temp_directory_path() /
+           (std::string(prefix) + std::to_string(VRTEST_GETPID()) + "_" + std::to_string(counter));
+}
 
 struct Entry {
     std::string file;   // e.g. "sphere.off"
@@ -78,7 +94,7 @@ std::string output_for(const std::string& mode) {
 // the generated file. Empty string if no output was produced.
 std::string run_and_hash(const std::string& model, const std::string& mode) {
     static int counter = 0;
-    fs::path work = fs::temp_directory_path() / ("vrtest_" + std::to_string(counter++));
+    fs::path work = work_dir("vrtest_", counter++);
     std::error_code ec;
     fs::remove_all(work, ec);
     fs::create_directories(work, ec);
@@ -118,7 +134,7 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
 // segment provenance in exact rational arithmetic (no shared code with the generator).
 std::string run_tracking_check_2d(const std::string& model) {
     static int counter = 2000000;
-    fs::path work = fs::temp_directory_path() / ("vrtrack2d_" + std::to_string(counter++));
+    fs::path work = work_dir("vrtrack2d_", counter++);
     std::error_code ec;
     fs::remove_all(work, ec);
     fs::create_directories(work, ec);
@@ -151,7 +167,7 @@ std::string run_tracking_check_2d(const std::string& model) {
 // exact-rational verifier is the source of truth for the face-provenance tracking.
 std::string run_tracking_check(const std::string& model, bool strict) {
     static int counter = 1000000;
-    fs::path work = fs::temp_directory_path() / ("vrtrack_" + std::to_string(counter++));
+    fs::path work = work_dir("vrtrack_", counter++);
     std::error_code ec;
     fs::remove_all(work, ec);
     fs::create_directories(work, ec);
@@ -189,7 +205,7 @@ std::string run_tracking_check(const std::string& model, bool strict) {
 std::string run_tracking_check_ep(
     const std::string& model, const std::string& edges, const std::string& points) {
     static int counter = 2000000;
-    fs::path work = fs::temp_directory_path() / ("vrtrackep_" + std::to_string(counter++));
+    fs::path work = work_dir("vrtrackep_", counter++);
     std::error_code ec;
     fs::remove_all(work, ec);
     fs::create_directories(work, ec);
@@ -289,7 +305,7 @@ bool extract_edges_off(const fs::path& model, const fs::path& out) {
 std::string run_combo(
     const std::string& surface, const std::string& edges, const std::string& points) {
     static int counter = 3000000;
-    fs::path work = fs::temp_directory_path() / ("vrcombo_" + std::to_string(counter++));
+    fs::path work = work_dir("vrcombo_", counter++);
     std::error_code ec;
     fs::remove_all(work, ec);
     fs::create_directories(work, ec);

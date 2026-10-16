@@ -1,258 +1,13 @@
-#include "BSP.h"
+#include "driver.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <iostream>
 
 using namespace vol_rem;
+using NFG::ip_error;
 
-// Skip whitespace and '#'-comment lines (standard OFF allows them, e.g. files
-// exported by meshio) so the parser lands on the next real token.
-static void off_skip_comments(FILE* file)
-{
-    int c;
-    while ((c = fgetc(file)) != EOF) {
-        if (isspace(c))
-            continue;
-        if (c == '#') {
-            while ((c = fgetc(file)) != EOF && c != '\n')
-                ;
-            continue;
-        }
-        ungetc(c, file);
-        return;
-    }
-}
-
-void read_OFF_file(
-    const char* filename,
-    double** vertices_p,
-    uint32_t* npts,
-    uint32_t** tri_vertices_p,
-    uint32_t* ntri,
-    bool verbose)
-{
-    FILE* file = fopen(filename, "r");
-    if (file == NULL)
-        ip_error("read_OFF_file: FATAL ERROR "
-                 "cannot open input file.\n");
-
-    // Check OFF mark (1st line).
-    char file_ext_read[3];
-    char file_ext_target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", file_ext_read) == 0)
-        ip_error("read_OFF_file: FATAL ERROR "
-                 "cannot read 1st line of input file\n");
-
-    for (uint32_t i = 0; i < 3; i++)
-        if (file_ext_read[i] != file_ext_target[i])
-            ip_error("read_OFF_file: FATAL ERROR "
-                     "1st line of input file is different from OFF\n");
-
-    // Reading number of points and triangles (skipping any comment lines).
-    off_skip_comments(file);
-    if (fscanf(file, " %d %d %*d ", npts, ntri) == 0)
-        ip_error("read_OFF_file: FATAL ERROR 2st line of "
-                 "input file do not contanins point and triangles numbers.\n");
-
-    if (verbose)
-        printf(
-            "file %s contains %d vertices and %d constraints (triangles)\n",
-            filename,
-            *npts,
-            *ntri);
-
-    // Reading points coordinates.
-    *vertices_p = (double*)malloc(sizeof(double) * 3 * (*npts));
-    *tri_vertices_p = (uint32_t*)malloc(sizeof(uint32_t) * 3 * (*ntri));
-
-    for (uint32_t i = 0; i < (*npts); i++) {
-        if (fscanf(
-                file,
-                " %lf %lf %lf ",
-                (*vertices_p) + (i * 3),
-                (*vertices_p) + (i * 3 + 1),
-                (*vertices_p) + (i * 3 + 2)) == 0)
-            ip_error("error reading input file\n");
-    }
-
-    uint32_t nv;
-    for (uint32_t i = 0; i < (*ntri); i++) {
-        if (fscanf(
-                file,
-                " %u %u %u %u ",
-                &nv,
-                (*tri_vertices_p) + (i * 3),
-                (*tri_vertices_p) + (i * 3 + 1),
-                (*tri_vertices_p) + (i * 3 + 2)) == 0)
-            ip_error("error reading input file\n");
-        if (nv != 3) ip_error("Non-triangular faces not supported\n");
-    }
-    fclose(file);
-}
-
-// Read an OFF-style edge file: "OFF", then "nv ne 0", nv vertex lines "x y z", then
-// ne edge lines "2 i j" (like an OFF face record but with two vertex indices).
-void read_edge_OFF(
-    const char* filename,
-    double** vertices_p,
-    uint32_t* npts,
-    uint32_t** edge_idx_p,
-    uint32_t* nedges,
-    bool verbose)
-{
-    FILE* file = fopen(filename, "r");
-    if (file == NULL) ip_error("read_edge_OFF: FATAL ERROR cannot open edge file.\n");
-
-    char ext[3];
-    const char target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", ext) == 0) ip_error("read_edge_OFF: cannot read 1st line\n");
-    for (uint32_t i = 0; i < 3; i++)
-        if (ext[i] != target[i]) ip_error("read_edge_OFF: 1st line is not OFF\n");
-
-    off_skip_comments(file);
-    uint32_t dummy = 0;
-    if (fscanf(file, " %u %u %u ", npts, nedges, &dummy) < 2)
-        ip_error("read_edge_OFF: cannot read vertex/edge counts\n");
-    if (verbose) printf("edge file %s: %u vertices, %u edges\n", filename, *npts, *nedges);
-
-    *vertices_p = (double*)malloc(sizeof(double) * 3 * (*npts));
-    *edge_idx_p = (uint32_t*)malloc(sizeof(uint32_t) * 2 * (*nedges));
-    for (uint32_t i = 0; i < (*npts); i++)
-        if (fscanf(
-                file, " %lf %lf %lf ", (*vertices_p) + 3 * i, (*vertices_p) + 3 * i + 1,
-                (*vertices_p) + 3 * i + 2) != 3)
-            ip_error("read_edge_OFF: error reading vertex\n");
-    uint32_t nv;
-    for (uint32_t i = 0; i < (*nedges); i++) {
-        if (fscanf(file, " %u %u %u ", &nv, (*edge_idx_p) + 2 * i, (*edge_idx_p) + 2 * i + 1) != 3)
-            ip_error("read_edge_OFF: error reading edge\n");
-        if (nv != 2) ip_error("read_edge_OFF: each edge record must list 2 vertices\n");
-    }
-    fclose(file);
-}
-
-// Read an OFF-style point file: "OFF", then "np 0 0", np vertex lines "x y z".
-void read_points_OFF(const char* filename, double** vertices_p, uint32_t* npts, bool verbose)
-{
-    FILE* file = fopen(filename, "r");
-    if (file == NULL) ip_error("read_points_OFF: FATAL ERROR cannot open point file.\n");
-
-    char ext[3];
-    const char target[] = {'O', 'F', 'F'};
-    if (fscanf(file, "%3c", ext) == 0) ip_error("read_points_OFF: cannot read 1st line\n");
-    for (uint32_t i = 0; i < 3; i++)
-        if (ext[i] != target[i]) ip_error("read_points_OFF: 1st line is not OFF\n");
-
-    off_skip_comments(file);
-    uint32_t nf = 0, dummy = 0;
-    if (fscanf(file, " %u %u %u ", npts, &nf, &dummy) < 1)
-        ip_error("read_points_OFF: cannot read vertex count\n");
-    if (verbose) printf("point file %s: %u points\n", filename, *npts);
-
-    *vertices_p = (double*)malloc(sizeof(double) * 3 * (*npts));
-    for (uint32_t i = 0; i < (*npts); i++)
-        if (fscanf(
-                file, " %lf %lf %lf ", (*vertices_p) + 3 * i, (*vertices_p) + 3 * i + 1,
-                (*vertices_p) + 3 * i + 2) != 3)
-            ip_error("read_points_OFF: error reading point\n");
-    fclose(file);
-}
-
-void read_TET_file(
-    const char* filename,
-    double** vertices_p,
-    uint32_t* npts,
-    uint32_t** tet_vertices_p,
-    uint32_t* ntet,
-    bool verbose)
-{
-    FILE* file = fopen(filename, "r");
-
-    uint32_t nv, nt;
-    if (!fscanf(file, "%d vertices\n", &nv))
-        ip_error("read_TET_file: FATAL ERROR\ncannot read 1st line of input file\n");
-    if (!fscanf(file, "%d tets\n", &nt))
-        ip_error("read_TET_file: FATAL ERROR\ncannot read 2nd line of input file\n");
-
-    if (verbose) printf("file %s contains %u vertices and %u tetrahedra\n", filename, nv, nt);
-
-    double* v_crd = (double*)malloc(nv * sizeof(double) * 3);
-
-    for (uint32_t i = 0; i < nv; i++) {
-        double* crd = v_crd + i * 3;
-        if (fscanf(file, "%lf %lf %lf\n", crd, crd + 1, crd + 2) != 3)
-            ip_error("read_TET_file: FATAL ERROR\ncannot read vertex coordinates\n");
-    }
-
-    uint32_t* t_idx = (uint32_t*)malloc(nt * sizeof(uint32_t) * 4);
-
-    for (uint32_t i = 0; i < nt; i++) {
-        uint32_t* nodes = t_idx + i * 4;
-        if (fscanf(file, "4 %u %u %u %u\n", nodes, nodes + 1, nodes + 2, nodes + 3) != 4)
-            ip_error("read_TET_file: FATAL ERROR\ncannot read tet indexes\n");
-    }
-
-    fclose(file);
-
-    *vertices_p = v_crd;
-    *npts = nv;
-    *tet_vertices_p = t_idx;
-    *ntet = nt;
-}
-
-void read_MEDIT_file(
-    const char* filename,
-    double** vertices_p,
-    uint32_t* npts,
-    uint32_t** tet_vertices_p,
-    uint32_t* ntet,
-    bool verbose)
-{
-    FILE* file = fopen(filename, "r");
-
-    char line[1024];
-    do {
-        if (!fscanf(file, "%s\n", line))
-            ip_error("read_MEDIT_file: Could not find Vertices keyword\n");
-    } while (strcmp(line, "Vertices"));
-
-    int dummy, nv = 0;
-    if (!fscanf(file, "%d\n", &nv)) ip_error("read_MEDIT_file: Could not read num vertices\n");
-    printf("Reading %d vertices\n", nv);
-
-    double* v_crd = (double*)malloc(nv * sizeof(double) * 3);
-
-    for (int i = 0; i < nv; i++) {
-        double* crd = v_crd + i * 3;
-        if (fscanf(file, "%lf %lf %lf %d\n", crd, crd + 1, crd + 2, &dummy) != 4)
-            ip_error("read_MEDIT_file: Could not read vertex coords\n");
-    }
-
-    int nt;
-    if (!fscanf(file, "%s\n", line) || strcmp(line, "Tetrahedra"))
-        ip_error("read_MEDIT_file: Could not find Tetrahedra keyword\n");
-    if (!fscanf(file, "%d\n", &nt)) ip_error("read_MEDIT_file: Could not read num tet\n");
-    printf("Reading %d tetrahedra\n", nt);
-
-    uint32_t* t_idx = (uint32_t*)malloc(nt * sizeof(uint32_t) * 4);
-
-    for (uint32_t i = 0; i < (uint32_t)nt; i++) {
-        uint32_t* nodes = t_idx + i * 4;
-        if (fscanf(file, "%d %d %d %d %d\n", nodes, nodes + 1, nodes + 2, nodes + 3, &dummy) != 5)
-            ip_error("read_MEDIT_file: Could not read tet indexes\n");
-    }
-    for (uint32_t i = 0; i < (uint32_t)nt * 4; i++) t_idx[i]--; // Decrease all indexes by one
-
-    fclose(file);
-
-    if (verbose) printf("file %s contains %u vertices and %u tetrahedra\n", filename, nv, nt);
-
-    *vertices_p = v_crd;
-    *npts = nv;
-    *tet_vertices_p = t_idx;
-    *ntet = nt;
-}
-
-#include "embed.h"
-#include "2d/arrangement2d.h"
-#include "2d/io2d.h"
 
 /// <summary>
 /// Main function
@@ -261,7 +16,21 @@ void read_MEDIT_file(
 /// <param name="argv"></param>
 /// <returns></returns>
 
+static int run(int argc, char** argv);
+
+// With NFG_IP_ERROR_THROWS (the Python build defines it for the whole library) ip_error throws
+// instead of exiting; report it as the exit would have, so the tool behaves the same either way.
 int main(int argc, char** argv)
+{
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what();
+        return EXIT_FAILURE;
+    }
+}
+
+static int run(int argc, char** argv)
 {
     bool triangulate = false;
     bool verbose = false;
@@ -370,19 +139,14 @@ int main(int argc, char** argv)
             printf("Loaded %zu points and %zu segments from %s\n", coords.size() / 2,
                    indexes.size() / 2, fileA_name);
 
-        vol_rem::vr2d::Arrangement2D arr;
-        if (!vol_rem::vr2d::build_arrangement(coords, indexes, arr, verbose))
-            ip_error("Failed to build the 2D arrangement\n");
+        const vr2d::ArrangementOutput arr = arrange_2d(coords, indexes, export_rational, verbose);
 
-        if (!vol_rem::vr2d::write_arrangement("triangulation.off", arr, export_rational))
+        if (!vr2d::write_arrangement("triangulation.off", arr))
             ip_error("Cannot write the output triangulation\n");
 
-        if (verbose) {
-            uint32_t nt = 0;
-            for (uint32_t t = 0; t < arr.num_triangles(); t++)
-                if (arr.tri_is_finite(t)) nt++;
-            printf("Wrote triangulation.off: %zu vertices, %u triangles\n", arr.V.size(), nt);
-        }
+        if (verbose)
+            printf("Wrote triangulation.off: %zu vertices, %zu triangles\n",
+                   (size_t)arr.num_vertices(), arr.tris.size());
         return 0;
     }
 
@@ -413,119 +177,58 @@ int main(int argc, char** argv)
     if (fileA_name == NULL && two_input)
         ip_error("A boolean operation needs a surface input\n");
 
-    double *coords_A = NULL, *coords_B = NULL;
-    uint32_t ncoords_A = 0, ncoords_B = 0;
-    uint32_t *tri_idx_A = NULL, *tri_idx_B = NULL;
-    uint32_t ntriidx_A = 0, ntriidx_B = 0;
-
     const bool file_B_is_tet =
         fileB_name != NULL && !strcmp(fileB_name + strlen(fileB_name) - 4, ".tet");
     const bool file_B_is_msh =
         fileB_name != NULL && !strcmp(fileB_name + strlen(fileB_name) - 4, ".msh");
 
-    bool embedsurf = (file_B_is_tet || file_B_is_msh);
+    // A second input that is a tetrahedral mesh means "embed A into it" rather than a boolean.
+    const bool embedsurf = (file_B_is_tet || file_B_is_msh);
     if (embedsurf) two_input = false;
+    if (two_input && fileB_name == NULL) ip_error("A boolean operation needs a second surface\n");
 
-    if (fileA_name)
-        read_OFF_file(fileA_name, &coords_A, &ncoords_A, &tri_idx_A, &ntriidx_A, verbose);
-    if (two_input)
-        read_OFF_file(fileB_name, &coords_B, &ncoords_B, &tri_idx_B, &ntriidx_B, verbose);
+    MeshOptions opts;
+    opts.verbose = verbose;
+    opts.logging = logging;
+    opts.triangulate = triangulate;
+    opts.export_rational = export_rational;
+    opts.fill_holes = fill_holes;
+    opts.keep_all_cells = keep_all_cells;
+    // Black faces win over the skin when both are asked for, as they always did.
+    opts.output = blackfaces ? MeshOutput::BLACK_FACES
+                             : (surfmesh ? MeshOutput::SKIN : MeshOutput::VOLUME);
 
-    BSPcomplex* complex;
+    TriMeshData A, B;
+    if (fileA_name) A = read_OFF(fileA_name, verbose);
+    if (two_input) B = read_OFF(fileB_name, verbose);
+
+    // Optional extra edges/points to insert into the tetrahedralization.
+    EdgeData edges;
+    PointData points;
+    if (edge_file) edges = read_edge_OFF(edge_file, verbose);
+    if (point_file) points = read_points_OFF(point_file, verbose);
+
+    MeshOutput out;
     if (embedsurf) {
-        if (file_B_is_tet)
-            read_TET_file(fileB_name, &coords_B, &ncoords_B, &tri_idx_B, &ntriidx_B, verbose);
-        else
-            read_MEDIT_file(fileB_name, &coords_B, &ncoords_B, &tri_idx_B, &ntriidx_B, verbose);
-
-        // const std::vector<double> tri_vrt_coords(coords_A, coords_A + ncoords_A * 3);
-        // const std::vector<uint32_t> triangle_indexes(tri_idx_A, tri_idx_A + ntriidx_A * 3);
-        // const std::vector<double> tet_vrt_coords(coords_B, coords_B + ncoords_B * 3);
-        // const std::vector<uint32_t> tet_indexes(tri_idx_B, tri_idx_B + ntriidx_B * 4);
-        // std::vector<bigrational> vertices;
-        // std::vector<uint32_t> facets;
-        // std::vector<uint32_t> cells;
-        // std::vector<uint32_t> facets_on_input;
-
-        // embed_tri_in_poly_mesh(
-        //     tri_vrt_coords,
-        //     triangle_indexes,
-        //     tet_vrt_coords,
-        //     tet_indexes,
-        //     vertices,
-        //     facets,
-        //     cells,
-        //     facets_on_input,
-        //     verbose
-        //);
-
-        complex = remakePolyhedralMesh(
-            coords_A,
-            ncoords_A,
-            tri_idx_A,
-            ntriidx_A,
-            coords_B,
-            ncoords_B,
-            tri_idx_B,
-            ntriidx_B,
-            verbose);
-        free(coords_A);
-        free(tri_idx_A);
+        const TetMeshData T =
+            file_B_is_tet ? read_TET(fileB_name, verbose) : read_MEDIT(fileB_name, verbose);
+        out = embed_mesh(
+            A, T, bool_opcode, edge_file ? &edges : nullptr, point_file ? &points : nullptr, opts);
     } else {
-        // Optional extra edges/points to insert into the tetrahedralization.
-        extra_features_t extra;
-        double *edge_verts = NULL, *point_verts = NULL;
-        uint32_t *edge_idx = NULL, n_edge_verts = 0, n_edges = 0, n_points = 0;
-        if (edge_file) {
-            read_edge_OFF(edge_file, &edge_verts, &n_edge_verts, &edge_idx, &n_edges, verbose);
-            extra.edge_verts = edge_verts;
-            extra.n_edge_verts = n_edge_verts;
-            extra.edge_idx = edge_idx;
-            extra.n_edges = n_edges;
-        }
-        if (point_file) {
-            read_points_OFF(point_file, &point_verts, &n_points, verbose);
-            extra.point_verts = point_verts;
-            extra.n_points = n_points;
-        }
-        complex = makePolyhedralMesh(
+        out = make_mesh(
+            fileA_name ? &A : nullptr,
             fileA_name,
-            coords_A,
-            ncoords_A,
-            tri_idx_A,
-            ntriidx_A,
-            fileB_name,
-            coords_B,
-            ncoords_B,
-            tri_idx_B,
-            ntriidx_B,
             bool_opcode,
-            true,
-            verbose,
-            logging,
-            fill_holes,
-            keep_all_cells,
-            (edge_file || point_file) ? &extra : nullptr);
-        if (edge_verts) free(edge_verts);
-        if (edge_idx) free(edge_idx);
-        if (point_verts) free(point_verts);
+            two_input ? &B : nullptr,
+            fileB_name,
+            edge_file ? &edges : nullptr,
+            point_file ? &points : nullptr,
+            opts);
     }
 
     printf("Writing output file...\n");
-    if (blackfaces)
-        complex->saveBlackFaces("black_faces.off", triangulate);
-    else if (surfmesh)
-        complex->saveSkin("skin.off", bool_opcode, triangulate);
-    else
-        complex->saveMesh(
-            (triangulate) ? ("volume.tet") : ("volume.msh"),
-            bool_opcode,
-            triangulate,
-            export_rational);
+    write_mesh_output(default_output_filename(opts), out);
     printf("Done.\n");
-
-    // make/remakePolyhedralMesh return an owning pointer; the caller must free it.
-    delete complex;
 
     return 0;
 }

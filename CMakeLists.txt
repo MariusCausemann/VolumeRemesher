@@ -28,6 +28,12 @@ set (SOURCES
     src/VolumeRemesher/inOutPartition.cpp
     src/VolumeRemesher/parallel.h
     src/VolumeRemesher/exact_coords.h
+    src/VolumeRemesher/io.h
+    src/VolumeRemesher/io.cpp
+    src/VolumeRemesher/mesh_output.h
+    src/VolumeRemesher/mesh_output.cpp
+    src/VolumeRemesher/driver.h
+    src/VolumeRemesher/driver.cpp
     # 2D pipeline: segment arrangement -> triangles
     src/VolumeRemesher/2d/predicates2d.h
     src/VolumeRemesher/2d/predicates2d.cpp
@@ -153,13 +159,16 @@ else()
 	# NFG:: with it, and a layout mismatch swaps interval bounds across the link), and
 	# MarcoAttene/NFG#5 adds bignatural::trimMemoryPool(), which lets a caller return the
 	# memory the thread-local bignatural pool grew into during an arrangement -- plus
-	# wildmeshing/NFG's danielepanozzo/ip-error-exit-failure: ip_error exits with a failure
+	# wildmeshing/NFG's danielepanozzo/ip-error-throws: ip_error exits with a failure
 	# status instead of 0, so ctest sees a test that trips it as failed (proposed upstream
-	# as MarcoAttene/NFG#6). Back to upstream once that is merged there. fast-envelope pins
-	# NFG too: see its cmake/recipes/ipred.cmake.
+	# as MarcoAttene/NFG#6), and with NFG_IP_ERROR_THROWS defined it throws a
+	# std::runtime_error instead of exiting at all, which the Python module needs so a bad
+	# input becomes an exception rather than the end of the interpreter (MarcoAttene/NFG#7).
+	# Back to upstream once those are merged there. fast-envelope pins NFG too: see its
+	# cmake/recipes/ipred.cmake.
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/wildmeshing/NFG.git
-		GIT_TAG a35198dc5762906f598ba77fc253d87cb8860f21
+		GIT_TAG 233026759ead5a2638e951ee7df54b5e484a8e00
 		SOURCE_SUBDIR do-not-configure
 	)
 
@@ -252,10 +261,25 @@ endif()
 
 add_library(VolumeRemesher::VolumeRemesher ALIAS ${PROJECT_NAME}_lib)
 
+# --- Python module ------------------------------------------------------------
+# volume_remesher._core (nanobind), see python/. pip builds it through scikit-build-core, which
+# turns this on and the CLI/tests off (pyproject.toml); a plain CMake configure with it ON also
+# builds it, into python/volume_remesher/, so `PYTHONPATH=python pytest` works from the tree.
+option(VOLUMEREMESHER_BUILD_PYTHON "Build the volume_remesher Python module" OFF)
+if(VOLUMEREMESHER_BUILD_PYTHON)
+	# The static library is linked into a shared module.
+	set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+	# A bad input must become a Python exception, not the end of the interpreter: ip_error
+	# throws std::runtime_error instead of exiting. PUBLIC so every translation unit sees the
+	# same inline function (mesh_generator, built in the same tree, catches it in main()).
+	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC NFG_IP_ERROR_THROWS)
+endif()
+
 
 # add the executable
+option(VOLUMEREMESHER_BUILD_CLI "Build the mesh_generator executable" ON)
 get_directory_property(HAS_PARENT PARENT_DIRECTORY)
-if(NOT HAS_PARENT)
+if(NOT HAS_PARENT AND VOLUMEREMESHER_BUILD_CLI)
 	add_executable(${PROJECT_NAME}
     	src/VolumeRemesher/main.cpp
 	)
@@ -272,9 +296,13 @@ if(NOT HAS_PARENT)
 	endif()
 endif()
 
-# Integration tests (only when this is the top-level project)
+# Integration tests (only when this is the top-level project; they run mesh_generator)
 option(VOLUMEREMESHER_BUILD_TESTS "Build the integration test suite" ON)
-if(NOT HAS_PARENT AND VOLUMEREMESHER_BUILD_TESTS)
+if(NOT HAS_PARENT AND VOLUMEREMESHER_BUILD_TESTS AND VOLUMEREMESHER_BUILD_CLI)
 	enable_testing()
 	add_subdirectory(tests)
+endif()
+
+if(VOLUMEREMESHER_BUILD_PYTHON)
+	add_subdirectory(python)
 endif()
