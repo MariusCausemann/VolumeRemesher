@@ -11,6 +11,22 @@
 //  - ip_error throws (NFG_IP_ERROR_THROWS) and the exception reaches Python as
 //    VolumeRemesherError, see the translator at the bottom.
 
+// Platform headers first. On MSVC, windows.h must precede any header that brings `using
+// namespace std` into scope (the library's do), or `byte` becomes ambiguous between std::byte
+// and the Windows SDK's; lean-and-mean also keeps the COM headers that trip on it out entirely.
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <process.h>
+#else
+#include <pthread.h>
+#endif
+
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
@@ -34,13 +50,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#include <windows.h>
-#else
-#include <pthread.h>
-#endif
 
 namespace nb = nanobind;
 using namespace nb::literals;

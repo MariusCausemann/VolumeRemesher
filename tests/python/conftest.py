@@ -40,7 +40,7 @@ def _find_tool(name: str) -> Path | None:
                        ROOT / b / "tests" / "Release" / exe]
     for c in candidates:
         if c.is_file():
-            return c
+            return c.resolve()  # absolute: the tools run with another working directory
     found = shutil.which(name)
     return Path(found) if found else None
 
