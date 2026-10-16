@@ -1,6 +1,7 @@
 """tests/embed_regression.cpp: embed_tri_in_poly_mesh on the replay capture of tetwild's call for
-Thingi10K model 100727 must emit positively oriented tets only. Hidden behind the `slow` marker
-(the embedding alone takes minutes); run with `pytest -m slow`."""
+Thingi10K model 100727 must emit positively oriented tets only. Hidden behind the `slow` marker:
+the embedding takes about 4 minutes and the exact check of the ~6M tets the float filter cannot
+decide another 8 (12M tets, 1.9M vertices; measured on an M3 Max). Run with `pytest -m slow`."""
 
 from __future__ import annotations
 
@@ -50,7 +51,9 @@ def test_emits_positively_oriented_tets(data_dir):
 
     # 1. Geometric: every tet has strictly positive exact signed volume. A floating point filter
     # on the double approximations settles the clear cases; the rest are decided in exact
-    # rational arithmetic (Shewchuk's orient3d error bound, generously rounded up).
+    # rational arithmetic. The bound must allow for the coordinates themselves being rounded
+    # (each by up to eps*|coordinate|): two close vertices then give a difference whose relative
+    # error is large, so Shewchuk's permanent-based bound (exact inputs) does not apply here.
     V = np.array([[float(x) for x in v] for v in o.vertices])
     T = o.tets.astype(np.int64)
     a, b, c, d = (V[T[:, k]] for k in range(4))
@@ -58,10 +61,16 @@ def test_emits_positively_oriented_tets(data_dir):
     det = (u[:, 0] * (v[:, 1] * w[:, 2] - v[:, 2] * w[:, 1])
            - u[:, 1] * (v[:, 0] * w[:, 2] - v[:, 2] * w[:, 0])
            + u[:, 2] * (v[:, 0] * w[:, 1] - v[:, 1] * w[:, 0]))
-    permanent = (np.abs(u[:, 0]) * (np.abs(v[:, 1] * w[:, 2]) + np.abs(v[:, 2] * w[:, 1]))
-                 + np.abs(u[:, 1]) * (np.abs(v[:, 0] * w[:, 2]) + np.abs(v[:, 2] * w[:, 0]))
-                 + np.abs(u[:, 2]) * (np.abs(v[:, 0] * w[:, 1]) + np.abs(v[:, 1] * w[:, 0])))
-    bound = 1e-14 * permanent  # ~ 12x Shewchuk's o3derrboundA, plus the Fraction->double rounding
+    eps = 2.0 ** -53
+    A = np.max(np.abs(np.stack([a, b, c, d], axis=0)), axis=(0, 2))  # per tet, largest |coordinate|
+    delta = 3.0 * eps * A  # absolute error of every component of u, v, w
+    au, av, aw = np.abs(u), np.abs(v), np.abs(w)
+    S = np.zeros(len(T))
+    permanent = np.zeros(len(T))
+    for i, j, k in ((0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)):
+        S += av[:, j] * aw[:, k] + au[:, i] * aw[:, k] + au[:, i] * av[:, j]
+        permanent += au[:, i] * av[:, j] * aw[:, k]
+    bound = 2.0 * (delta * S + 8.0 * eps * permanent)
     undecided = np.flatnonzero(np.abs(det) <= bound)
     assert np.all(det[np.abs(det) > bound] > 0), "a tet has clearly negative volume"
     bad = [int(t) for t in undecided
