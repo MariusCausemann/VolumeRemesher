@@ -153,22 +153,20 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 else()
 	# Pinned to exact commits for reproducible, byte-identical output across platforms
 	# (moving branch heads would let different CI runners fetch different sources).
-	# NFG: upstream main 2909ad6 -- MarcoAttene/NFG#4 counts _M_X64 as SSE2, so on MSVC x64
-	# every translation unit gets the same (SIMD) interval_number layout whether or not it
-	# is built with /arch:AVX2 (downstreams that link this library without that flag share
-	# NFG:: with it, and a layout mismatch swaps interval bounds across the link), and
-	# MarcoAttene/NFG#5 adds bignatural::trimMemoryPool(), which lets a caller return the
-	# memory the thread-local bignatural pool grew into during an arrangement -- plus
-	# wildmeshing/NFG's danielepanozzo/ip-error-throws: ip_error exits with a failure
-	# status instead of 0, so ctest sees a test that trips it as failed (proposed upstream
-	# as MarcoAttene/NFG#6), and with NFG_IP_ERROR_THROWS defined it throws a
-	# std::runtime_error instead of exiting at all, which the Python module needs so a bad
-	# input becomes an exception rather than the end of the interpreter (MarcoAttene/NFG#7).
-	# Back to upstream once those are merged there. fast-envelope pins NFG too: see its
-	# cmake/recipes/ipred.cmake.
+	# NFG: upstream main aeec975. Among what it carries: MarcoAttene/NFG#4 counts _M_X64 as
+	# SSE2, so on MSVC x64 every translation unit gets the same (SIMD) interval_number layout
+	# whether or not it is built with /arch:AVX2 (downstreams that link this library without
+	# that flag share NFG:: with it, and a layout mismatch swaps interval bounds across the
+	# link); #5 adds bignatural::trimMemoryPool(), which lets a caller return the memory the
+	# thread-local bignatural pool grew into during an arrangement; #6 makes ip_error exit with
+	# a failure status instead of 0, so ctest sees a test that trips it as failed; and #7 makes
+	# it throw a std::runtime_error instead of exiting when NFG_IP_ERROR_THROWS is defined,
+	# which the Python module needs so a bad input becomes an exception rather than the end of
+	# the interpreter. Same numerics.h as the wildmeshing fork commit pinned before (2330267).
+	# fast-envelope pins NFG too: see its cmake/recipes/ipred.cmake.
 	FetchContent_Declare(nfg
-		GIT_REPOSITORY https://github.com/wildmeshing/NFG.git
-		GIT_TAG 233026759ead5a2638e951ee7df54b5e484a8e00
+		GIT_REPOSITORY https://github.com/MarcoAttene/NFG.git
+		GIT_TAG aeec97547a67dc6904ab84b39b15d20c6d62f65a
 		SOURCE_SUBDIR do-not-configure
 	)
 
@@ -178,24 +176,21 @@ else()
 		SOURCE_SUBDIR do-not-configure
 	)
 
-	# Delaunay3D: wildmeshing/Delaunay3D's danielepanozzo/integration, which is upstream
-	# main e18e96a plus two branches proposed upstream:
-	#   - danielepanozzo/orphan-inc-tet-point-search (MarcoAttene/Delaunay3D#2):
-	#     searchTetrahedron takes a point as well as a vertex id (locate_point relies on it).
-	#     It no longer touches insertExistingVertexNonDelaunay: inserting a point at an
-	#     existing vertex's position is unsupported, and remakePolyhedralMesh checks for it.
-	#   - danielepanozzo/morton-tie-break (MarcoAttene/Delaunay3D#3): upstream 2d0279a inserts
-	#     the vertices of tetrahedrize() in Morton order above 1150 of them, sorting by the code
-	#     alone; std::sort leaves points that share a grid cell in a library-dependent order, so
-	#     the tets came out in a different order on each platform. Ties now go by vertex index.
-	# The Morton order changes the order tetrahedrize() creates tets in, not which tets it
-	# creates (symbolic perturbation makes the set order-independent), so it moves the
-	# reference hashes of every model above 1150 vertices. embed_tri_in_poly_mesh never calls
-	# tetrahedrize() -- it inserts into the caller's tet mesh -- and is unaffected.
-	# Back to upstream once both are merged there.
+	# Delaunay3D: upstream main 362502e. Besides the 3D tetrahedrization itself:
+	#   - 2d0279a inserts the vertices of tetrahedrize() in Morton order above 1150 of them, and
+	#     #3 breaks ties between points in the same grid cell by vertex index (std::sort would
+	#     leave them in a library-dependent order, and the tets in a different order on each
+	#     platform). That changes the order tetrahedrize() creates tets in, not which tets are
+	#     created: symbolic perturbation makes the set order-independent. embed_tri_in_poly_mesh
+	#     never calls tetrahedrize() -- it inserts into the caller's tet mesh.
+	#   - #2 adds searchTetrahedron for a point that is not a vertex (locate_point relies on it).
+	#     Inserting a point at an existing vertex's position is unsupported; remakePolyhedralMesh
+	#     checks for that itself.
+	#   - 60d00a8: tetrahedrize() returns no tets, instead of stopping in ip_error, when the
+	#     vertices do not span a volume; makePolyhedralMesh reports that itself.
 	FetchContent_Declare(Delaunay3D
-		GIT_REPOSITORY https://github.com/wildmeshing/Delaunay3D.git
-		GIT_TAG 22bd3fe36cf4260e0400c6e3aa9ba6b695355733
+		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
+		GIT_TAG 362502e63abb7adb3bf5a7a3b1e1a303640f8812
 		SOURCE_SUBDIR do-not-configure
 	)
 

@@ -569,8 +569,10 @@ BSPcomplex* makePolyhedralMesh(
     // Setup for following vertex permutation in tetrahedrize
     //for (uint32_t i = 0; i < mesh->num_vertices; i++) mesh->vertices[i].original_index = i;
 
-    // Create Delaunay tetrahedrization of the vertices
+    // Create Delaunay tetrahedrization of the vertices. Delaunay3D returns no tets, rather than
+    // stopping, when the vertices do not span a volume (all coplanar or collinear).
     mesh->tetrahedrize();
+    if (mesh->numTets() == 0) ip_error("Input vertices do not define a volume.\n");
     // mesh->saveTET("delaunay.tet");
 
     //// Align constraint vertices after vertex permutation
