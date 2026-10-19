@@ -181,9 +181,9 @@ else()
 	# Delaunay3D: wildmeshing/Delaunay3D's danielepanozzo/integration, which is upstream
 	# main e18e96a plus two branches proposed upstream:
 	#   - danielepanozzo/orphan-inc-tet-point-search (MarcoAttene/Delaunay3D#2):
-	#     insertExistingVertexNonDelaunay marks a vertex it evicts (a coincident copy) as
-	#     isolated instead of leaving its inc_tet stale, VT() guards against such a vertex,
-	#     and searchTetrahedron takes a point as well as a vertex id (locate_point relies on it).
+	#     searchTetrahedron takes a point as well as a vertex id (locate_point relies on it).
+	#     It no longer touches insertExistingVertexNonDelaunay: inserting a point at an
+	#     existing vertex's position is unsupported, and remakePolyhedralMesh checks for it.
 	#   - danielepanozzo/morton-tie-break (MarcoAttene/Delaunay3D#3): upstream 2d0279a inserts
 	#     the vertices of tetrahedrize() in Morton order above 1150 of them, sorting by the code
 	#     alone; std::sort leaves points that share a grid cell in a library-dependent order, so
@@ -195,7 +195,7 @@ else()
 	# Back to upstream once both are merged there.
 	FetchContent_Declare(Delaunay3D
 		GIT_REPOSITORY https://github.com/wildmeshing/Delaunay3D.git
-		GIT_TAG f1c7c195599eb9c155df9422ede16f13f3dcb50b
+		GIT_TAG 22bd3fe36cf4260e0400c6e3aa9ba6b695355733
 		SOURCE_SUBDIR do-not-configure
 	)
 

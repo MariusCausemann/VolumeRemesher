@@ -887,15 +887,23 @@ BSPcomplex* remakePolyhedralMesh(
     // it: searchTetrahedron ends in a ghost tet for a vertex outside (it never returns
     // UINT64_MAX, so the former `tet != UINT64_MAX` guard was dead and the insertion read past
     // the vertex array), and the insertion of a vertex on the boundary absorbs the ghost tets.
-    // A vertex at an existing vertex's position takes its place in every tet, and the earlier
-    // copy is left isolated (inc_tet == UINT64_MAX). That is harmless: nothing references it --
-    // read_nodes_and_constraints deduplicates the surface, and insert_edges_and_points maps a
-    // feature to the last copy, the one that survives.
+    //
+    // Nor may it coincide with a vertex already in the mesh: Delaunay3D does not support
+    // inserting a point at an existing vertex's position, so that check is ours. Such a vertex
+    // is common -- wildmeshing-toolkit's tetwild and simwild build the tet mesh from the
+    // surface vertices plus a lattice, so there every surface vertex has a copy in the mesh --
+    // and it is not inserted: the constraints that use it are moved onto the vertex already
+    // there (below), and the appended copy is left in no tet. An existing vertex at the
+    // position of a point in the closure of a tet is a corner of that tet, so the four corners
+    // of the tet locate_point returns are the only candidates.
     //for (uint32_t i = 0; i < mesh->numVertices(); i++) mesh->vertices[i].original_index = i;
+    std::vector<uint32_t> existing_copy(mesh->numVertices() - orig_numv, UINT32_MAX);
+    bool any_existing_copy = false;
     uint64_t walk_tet = 0;
     for (uint32_t vi = orig_numv; vi < mesh->numVertices(); vi++) {
         uint64_t tet = 0;
-        const point_location_t loc = locate_point(mesh, &walk_tet, mesh->vertices[vi], &tet);
+        const pointType& p = mesh->vertices[vi];
+        const point_location_t loc = locate_point(mesh, &walk_tet, p, &tet);
         if (loc != PT_INSIDE) {
             char msg[256];
             snprintf(
@@ -910,8 +918,25 @@ BSPcomplex* remakePolyhedralMesh(
                 loc == PT_OUTSIDE ? "outside" : "on the boundary of");
             ip_error(msg);
         }
+        const uint32_t* corners = mesh->getTetNodes(tet);
+        uint32_t w = UINT32_MAX;
+        for (int c = 0; c < 4 && w == UINT32_MAX; c++) {
+            const pointType& q = mesh->vertices[corners[c]];
+            if (q.X() == p.X() && q.Y() == p.Y() && q.Z() == p.Z()) w = corners[c];
+        }
+        if (w != UINT32_MAX) {
+            existing_copy[vi - orig_numv] = w;
+            any_existing_copy = true;
+            continue;
+        }
         mesh->insertExistingVertexNonDelaunay(vi, tet);
     }
+    if (any_existing_copy)
+        for (uint32_t i = 0; i < constraints->num_triangles * 3; i++) {
+            const uint32_t v = constraints->tri_vertices[i];
+            if (v >= orig_numv && existing_copy[v - orig_numv] != UINT32_MAX)
+                constraints->tri_vertices[i] = existing_copy[v - orig_numv];
+        }
 
     clock_t time0 = clock();
     clock_t time2 = time0;

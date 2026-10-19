@@ -3725,15 +3725,14 @@ void insert_edges_and_points(
     // Among existing vertices at the same position the LAST one wins. remakePolyhedralMesh
     // appends the surface vertices after the tet mesh's, and the tet mesh may already have a
     // vertex at a surface vertex's position (wildmeshing-toolkit's tetwild builds it from the
-    // input vertices plus box points). Inserting a vertex at an existing vertex's position takes
-    // that vertex's place in every tet and leaves it in none, so with the insertion order the
-    // surviving copy is always the last one. A feature mapped to an evicted copy walked from a
-    // vertex no tet contains, and VT() returned tets that do not hold it (opposite_face_vertices
-    // then wrote 4 entries into a 3-entry array). Within one block the vertices are unique
-    // (read_nodes_and_constraints deduplicates the surface), so the choice is deterministic.
-    // A tet-mesh vertex that is in no tet (unreferenced by them) cannot anchor a feature either:
-    // nothing can walk from it. The surface vertices are in no tet yet too, but they are
-    // inserted before the features are used.
+    // input vertices plus box points). Which of the two a feature is mapped to does not matter:
+    // remakePolyhedralMesh does not insert a surface vertex that coincides with a vertex of the
+    // tet mesh, and moves every constraint on it -- these forcing triangles included -- onto
+    // that vertex. Within one block the vertices are unique (read_nodes_and_constraints
+    // deduplicates the surface), so the choice is deterministic.
+    // A tet-mesh vertex that is in no tet (unreferenced by them) cannot anchor a feature: nothing
+    // can walk from it. The surface vertices are in no tet yet either, but they are inserted (or
+    // resolved to the tet-mesh vertex they coincide with) before the features are used.
     auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
     std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
     vmap.reserve(base_v + nv_add);
