@@ -878,7 +878,14 @@ place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t
     uint32_t num_virtual_constraints = 0;
 
     uint32_t he = 0; // half-edge index.
-    while (he < num_half_edges - 1) {
+    // Every same-edge group is visited, the last one included, so every boundary edge (one
+    // incident constraint) gets its virtual constraint. The bound was once num_half_edges - 1,
+    // which skipped the last half-edge in sorted order: when that edge was a boundary edge and
+    // not an edge of the tet mesh, the cells along it were not split, and the facets on the
+    // constraint plane straddled it (one triangle in a 12-vertex tet mesh: 2 of 3 virtual
+    // constraints, on-input area 1.2x the triangle's). 0a1d5ca and f12f9b4 fixed this; the
+    // re-import in 29390c9 brought it back.
+    while (he < num_half_edges) {
         uint32_t onSameEdge = 1; // Counts how many constraints are
                                  // incident on current half-edge.
         while (he + onSameEdge < num_half_edges &&
