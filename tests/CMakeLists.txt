@@ -133,6 +133,20 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 endif()
 catch_discover_tests(feature_vertex_regression)
 
+# Every boundary edge of the input gets a virtual constraint, the last one in sorted order
+# included, so no on-input facet crosses it (virtual_constraint_regression.cpp). One triangle in
+# tet meshes of a dozen vertices: milliseconds.
+add_executable(virtual_constraint_regression virtual_constraint_regression.cpp)
+target_link_libraries(virtual_constraint_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(virtual_constraint_regression PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET virtual_constraint_regression POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:virtual_constraint_regression> $<TARGET_FILE_DIR:virtual_constraint_regression>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(virtual_constraint_regression)
+
 # Error paths of embedding into a given tet mesh (feature_vertex_errors.cpp). Every case ends in
 # ip_error, which prints its message and exits, so each case is registered here by its Catch2
 # name together with the message it must print: it passes iff the message appears, and a case
