@@ -188,9 +188,13 @@ else()
 	#     checks for that itself.
 	#   - 60d00a8: tetrahedrize() returns no tets, instead of stopping in ip_error, when the
 	#     vertices do not span a volume; makePolyhedralMesh reports that itself.
+	# Pinned to fast-start (1223989) on MariusCausemann/Delaunay3D, upstream main plus one
+	# commit: init() skips points collinear with the first two vertices instead of scanning all
+	# n for each (quadratic on voxel-like input), and setNumThreads lets tetrahedrize() sort the
+	# vertices in Morton order on several threads. Same tets in the same order.
 	FetchContent_Declare(Delaunay3D
-		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
-		GIT_TAG 362502e63abb7adb3bf5a7a3b1e1a303640f8812
+		GIT_REPOSITORY https://github.com/MariusCausemann/Delaunay3D.git
+		GIT_TAG 122398948863e13465f4e25f350298c152941b4c
 		SOURCE_SUBDIR do-not-configure
 	)
 
