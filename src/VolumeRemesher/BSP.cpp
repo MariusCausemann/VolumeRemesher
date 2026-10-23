@@ -2801,7 +2801,7 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells, FaceProvenanc
     // so flip in parallel.
     parallel_blocks(final_tets.size() / 4, [&](uint64_t lo, uint64_t hi) {
         for (uint64_t k = lo; k < hi; k++) {
-            const uint32_t t = (uint32_t)(k * 4);
+            const uint64_t t = 4 * k;
             if (genericPoint::orient3D(
                     *vertices[final_tets[t]],
                     *vertices[final_tets[t + 1]],
@@ -3018,6 +3018,30 @@ void BSPcomplex::computeCoplanarGroups()
     }
 }
 
+// The indices i in [0, n) with keep(i), in increasing order. In parallel: each chunk counts its
+// kept indices, a prefix sum places the chunks, and each chunk writes its own (keep runs twice).
+template <class I, class F>
+static std::vector<I> parallel_select(uint64_t n, F&& keep)
+{
+    const uint64_t chunk = 4096, num_chunks = (n + chunk - 1) / chunk;
+    std::vector<uint64_t> start(num_chunks + 1, 0);
+    parallel_blocks(num_chunks, [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t c = lo; c < hi; c++)
+            for (uint64_t i = c * chunk; i < std::min(n, (c + 1) * chunk); i++)
+                if (keep(i)) start[c + 1]++;
+    });
+    for (uint64_t c = 0; c < num_chunks; c++) start[c + 1] += start[c];
+    std::vector<I> out(start[num_chunks]);
+    parallel_blocks(num_chunks, [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t c = lo; c < hi; c++) {
+            uint64_t j = start[c];
+            for (uint64_t i = c * chunk; i < std::min(n, (c + 1) * chunk); i++)
+                if (keep(i)) out[j++] = (I)i;
+        }
+    });
+    return out;
+}
+
 void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
 {
     triangle_provenance.clear();
@@ -3032,29 +3056,37 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
 
     // Index every BLACK (on-surface) triangular face by its sorted vertex triple, so a tet face
     // can be matched to the BSP face it came from by exact integer identity. The faces are
-    // bucketed at their smallest vertex (in face order; a lookup takes the last match).
-    std::vector<uint64_t> black; // face ids
-    std::vector<std::array<uint32_t, 3>> black_key;
-    {
-        std::vector<uint32_t> fv(3, UINT32_MAX);
-        for (uint64_t fi = 0; fi < faces.size(); fi++) {
-            const BSPface& face = faces[fi];
-            if (face.colour == WHITE || face.edges.size() != 3) continue;
-            list_faceVertices(faces[fi], fv);
-            std::array<uint32_t, 3> key = {fv[0], fv[1], fv[2]};
-            std::sort(key.begin(), key.end());
-            black.push_back(fi);
-            black_key.push_back(key);
-        }
-    }
+    // bucketed at their smallest vertex (in no particular order; a lookup takes the match that
+    // is last in face order). All in parallel.
+    const std::vector<uint64_t> black = // face ids
+        parallel_select<uint64_t>(faces.size(), [&](uint64_t fi) {
+            return faces[fi].colour != WHITE && faces[fi].edges.size() == 3;
+        });
     if (black.empty()) return;
+    std::vector<std::array<uint32_t, 3>> black_key(black.size());
+    parallel_blocks(black.size(), [&](uint64_t lo, uint64_t hi) {
+        std::vector<uint32_t> fv(3, UINT32_MAX);
+        for (uint64_t b = lo; b < hi; b++) {
+            list_faceVertices(faces[black[b]], fv);
+            black_key[b] = {fv[0], fv[1], fv[2]};
+            std::sort(black_key[b].begin(), black_key[b].end());
+        }
+    });
     const uint32_t NONE = UINT32_MAX;
     std::vector<uint32_t> bucket_start(vertices.size() + 1, 0), bucket(black.size());
-    for (const auto& key : black_key) bucket_start[key[0] + 1]++;
+    parallel_blocks(black.size(), [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t b = lo; b < hi; b++)
+            std::atomic_ref<uint32_t>(bucket_start[black_key[b][0] + 1])
+                .fetch_add(1, std::memory_order_relaxed);
+    });
     for (size_t v = 0; v < vertices.size(); v++) bucket_start[v + 1] += bucket_start[v];
     {
         std::vector<uint32_t> pos(bucket_start.begin(), bucket_start.end() - 1);
-        for (uint32_t b = 0; b < (uint32_t)black.size(); b++) bucket[pos[black_key[b][0]]++] = b;
+        parallel_blocks(black.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t b = lo; b < hi; b++)
+                bucket[std::atomic_ref<uint32_t>(pos[black_key[b][0]])
+                           .fetch_add(1, std::memory_order_relaxed)] = (uint32_t)b;
+        });
     }
 
     // The black face (index into black) of each tet face 4 k + lf, or NONE. Face lf is
@@ -3072,29 +3104,13 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
                 std::sort(key.begin(), key.end());
                 uint32_t b = NONE;
                 for (uint32_t i = bucket_start[key[0]]; i < bucket_start[key[0] + 1]; i++)
-                    if (black_key[bucket[i]] == key) b = bucket[i];
+                    if (black_key[bucket[i]] == key && (b == NONE || bucket[i] > b)) b = bucket[i];
                 tet_face_black[4 * k + lf] = b;
             }
         }
     });
 
-    // The black faces met, in order of the first tet face meeting them, and that tet face. A
-    // surface face borders two kept cells, so it is met from two tets; the first is recorded.
-    std::vector<uint64_t> first(black.size(), UINT64_MAX);
-    std::vector<uint32_t> met;
-    for (uint64_t t = 0; t < tet_face_black.size(); t++) {
-        const uint32_t b = tet_face_black[t];
-        if (b != NONE && first[b] == UINT64_MAX) {
-            first[b] = t;
-            met.push_back(b);
-        }
-    }
-    auto tet_face = [&](uint64_t t) {
-        const uint32_t* tet = &final_tets[t - t % 4];
-        const int lf = (int)(t % 4);
-        return std::array<uint32_t, 3>{tet[(lf + 1) & 3], tet[(lf + 2) & 3], tet[(lf + 3) & 3]};
-    };
-    // Does the black face seen as tet face abc overlap input triangle constr?
+    // Does the black face with vertices abc overlap input triangle constr?
     auto overlaps = [&](const std::array<uint32_t, 3>& abc, uint32_t constr, int n_max) {
         const uint32_t cID = 3 * constr;
         return coplanar_tris_overlap(
@@ -3109,22 +3125,27 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
 
     if (mode == FaceProvenance::FACES) {
         // A black face met tiles input triangles iff it overlaps one of its genuine coplanar
-        // constraints (the test below, stopping at the first).
-        std::vector<char> on_input(met.size(), 0);
-        parallel_blocks(met.size(), [&](uint64_t lo, uint64_t hi) {
-            for (uint64_t m = lo; m < hi; m++) {
-                const std::array<uint32_t, 3> abc = tet_face(first[met[m]]);
-                const BSPface& face = faces[black[met[m]]];
+        // constraints (the test below, stopping at the first). The test does not depend on the
+        // order of the face's vertices, so it takes them from its key.
+        std::vector<char> met(black.size(), 0), black_on_input(black.size(), 0);
+        parallel_blocks(tet_face_black.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t t = lo; t < hi; t++)
+                if (tet_face_black[t] != NONE)
+                    std::atomic_ref<char>(met[tet_face_black[t]])
+                        .store(1, std::memory_order_relaxed);
+        });
+        parallel_blocks(black.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t b = lo; b < hi; b++) {
+                if (!met[b]) continue;
+                const BSPface& face = faces[black[b]];
                 const int n_max = face_dominant_normal_component(face);
                 for (uint32_t constr : face.coplanar_constraints)
-                    if (constr < first_fake_constraint && overlaps(abc, constr, n_max)) {
-                        on_input[m] = 1;
+                    if (constr < first_fake_constraint && overlaps(black_key[b], constr, n_max)) {
+                        black_on_input[b] = 1;
                         break;
                     }
             }
         });
-        std::vector<char> black_on_input(black.size(), 0);
-        for (uint64_t m = 0; m < met.size(); m++) black_on_input[met[m]] = on_input[m];
         parallel_blocks(num_tets, [&](uint64_t lo, uint64_t hi) {
             for (uint64_t k = lo; k < hi; k++)
                 for (int lf = 0; lf < 4; lf++) {
@@ -3135,6 +3156,34 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
         return;
     }
 
+    // The black faces met, in order of the first tet face meeting them, and that tet face. A
+    // surface face borders two kept cells, so it is met from two tets; the first is recorded.
+    // In parallel: an atomic min gives each black face its first tet face, and the met list is
+    // the tet faces that are their black face's first.
+    std::vector<uint64_t> first(black.size(), UINT64_MAX);
+    parallel_blocks(tet_face_black.size(), [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t t = lo; t < hi; t++) {
+            const uint32_t b = tet_face_black[t];
+            if (b == NONE) continue;
+            std::atomic_ref<uint64_t> f(first[b]);
+            uint64_t cur = f.load(std::memory_order_relaxed);
+            while (t < cur && !f.compare_exchange_weak(cur, t, std::memory_order_relaxed));
+        }
+    });
+    const std::vector<uint64_t> met_at =
+        parallel_select<uint64_t>(tet_face_black.size(), [&](uint64_t t) {
+            const uint32_t b = tet_face_black[t];
+            return b != NONE && first[b] == t;
+        });
+    std::vector<uint32_t> met(met_at.size());
+    parallel_blocks(met.size(), [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t m = lo; m < hi; m++) met[m] = tet_face_black[met_at[m]];
+    });
+    auto tet_face = [&](uint64_t t) {
+        const uint32_t* tet = &final_tets[t - t % 4];
+        const int lf = (int)(t % 4);
+        return std::array<uint32_t, 3>{tet[(lf + 1) & 3], tet[(lf + 2) & 3], tet[(lf + 3) & 3]};
+    };
     // Per black face met, the coplanar group(s) it overlaps (positive-area SAT over its coplanar
     // constraints). Usually one group; more than one only where two exactly-coplanar surfaces
     // overlap on the same plane (all triangles overlapped by one face are on that face's single
@@ -3185,7 +3234,7 @@ void BSPcomplex::trackEdgePointProvenance()
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> tet_edges; // sorted pair -> a tet id
     std::vector<uint32_t> vertex_to_tet(vertices.size(), UINT32_MAX); // a tet containing v
     static const int E[6][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}};
-    for (uint32_t k = 0; 4u * k < final_tets.size(); k++) {
+    for (uint64_t k = 0; 4 * k < final_tets.size(); k++) {
         const uint32_t* tet = &final_tets[4 * k];
         for (int i = 0; i < 4; i++)
             if (vertex_to_tet[tet[i]] == UINT32_MAX) vertex_to_tet[tet[i]] = k;
@@ -3837,16 +3886,25 @@ void BSPcomplex::extractVolume(
     if (tetrahedrize) {
         makeTetrahedra(false, false, face_provenance);
 
-        for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
-        for (uint32_t t = 0; t < final_tets.size(); t++) vrts_visit[final_tets[t]] = 1;
-
-        std::vector<uint32_t> vmap(vertices.size(), 0);
-        std::vector<uint32_t> out_vrts; // the output vertices, in order
-        for (size_t i = 0; i < vrts_visit.size(); i++) {
-            vmap[i] = (uint32_t)out_vrts.size();
-            if (vrts_visit[i]) out_vrts.push_back((uint32_t)i);
-        }
+        // The output vertices, in order, and vmap[i] = the number of output vertices before
+        // vertex i. All in parallel (vrts_visit is marked through relaxed atomic stores).
+        std::fill(vrts_visit.begin(), vrts_visit.end(), 0);
+        parallel_blocks(final_tets.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t t = lo; t < hi; t++)
+                std::atomic_ref<uint32_t>(vrts_visit[final_tets[t]])
+                    .store(1, std::memory_order_relaxed);
+        });
+        const std::vector<uint32_t> out_vrts = parallel_select<uint32_t>(
+            vrts_visit.size(),
+            [&](uint64_t i) { return vrts_visit[i] != 0; });
         const size_t num_v = out_vrts.size();
+        std::vector<uint32_t> vmap(vertices.size());
+        parallel_blocks(vmap.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t i = lo; i < hi; i++)
+                vmap[i] =
+                    (uint32_t)(std::lower_bound(out_vrts.begin(), out_vrts.end(), (uint32_t)i) -
+                               out_vrts.begin());
+        });
 
         // Vertex coordinates. The approximate doubles, NOT the exact rationals: an exact
         // coordinate's text would depend on the bignum backend (see exact_coords below for the
@@ -3871,26 +3929,33 @@ void BSPcomplex::extractVolume(
             }
         });
 
-        out.tets.reserve(final_tets.size());
-        for (uint32_t t = 0; t < final_tets.size(); t++) out.tets.push_back(vmap[final_tets[t]]);
+        out.tets.resize(final_tets.size());
+        parallel_blocks(final_tets.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t t = lo; t < hi; t++) out.tets[t] = vmap[final_tets[t]];
+        });
 
         // Input-surface provenance, keyed by coplanar group: per group the output tet faces
         // tiling it, {tet, v0, v1, v2} in output vertex indices.
         out.triangle_provenance.resize(triangle_provenance.size());
-        for (uint32_t g = 0; g < triangle_provenance.size(); g++) {
-            out.triangle_provenance[g].reserve(triangle_provenance[g].size());
-            for (const auto& f : triangle_provenance[g])
-                out.triangle_provenance[g].push_back({f[0], vmap[f[1]], vmap[f[2]], vmap[f[3]]});
-        }
+        parallel_blocks(triangle_provenance.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t g = lo; g < hi; g++) {
+                out.triangle_provenance[g].reserve(triangle_provenance[g].size());
+                for (const auto& f : triangle_provenance[g])
+                    out.triangle_provenance[g].push_back(
+                        {f[0], vmap[f[1]], vmap[f[2]], vmap[f[3]]});
+            }
+        });
 
         // The coplanar group of each real input constraint, keyed by its index in the INPUT
         // (degenerate input triangles are dropped by the mesher, so this is not 0..n-1).
-        out.constraint_groups.reserve(constraint_coplanar_group.size());
-        for (uint32_t c = 0; c < constraint_coplanar_group.size(); c++) {
-            const uint32_t off =
-                constraint_original_index.empty() ? c : constraint_original_index[c];
-            out.constraint_groups.push_back({off, constraint_coplanar_group[c]});
-        }
+        out.constraint_groups.resize(constraint_coplanar_group.size());
+        parallel_blocks(constraint_coplanar_group.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t c = lo; c < hi; c++) {
+                const uint32_t off =
+                    constraint_original_index.empty() ? (uint32_t)c : constraint_original_index[c];
+                out.constraint_groups[c] = {off, constraint_coplanar_group[c]};
+            }
+        });
         out.num_coplanar_groups = (uint32_t)coplanar_group_size.size();
         out.surface_faces = std::move(tet_surface_faces);
 
@@ -3937,7 +4002,7 @@ void BSPcomplex::extractVolume(
         // positive volume. makeTetrahedra() guarantees this (it drops zero-volume
         // tets and orients the rest positively); assert it with the exact orient3D
         // predicate -- no floating point -- so any regression is caught immediately.
-        for (uint32_t t = 0; t < final_tets.size(); t += 4)
+        for (uint64_t t = 0; t < final_tets.size(); t += 4)
             assert(genericPoint::orient3D(
                        *vertices[final_tets[t]],
                        *vertices[final_tets[t + 1]],
