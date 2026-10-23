@@ -3133,6 +3133,52 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
         }
     });
 
+    // Does the black face with vertices abc overlap input triangle constr?
+    auto overlaps = [&](const std::array<uint32_t, 3>& abc, uint32_t constr, int n_max) {
+        const uint32_t cID = 3 * constr;
+        return coplanar_tris_overlap(
+            *vertices[abc[0]],
+            *vertices[abc[1]],
+            *vertices[abc[2]],
+            *vertices[constraints_vrts[cID]],
+            *vertices[constraints_vrts[cID + 1]],
+            *vertices[constraints_vrts[cID + 2]],
+            n_max);
+    };
+
+    if (mode == FaceProvenance::FACES) {
+        // A black face met tiles input triangles iff it overlaps one of its genuine coplanar
+        // constraints (the test below, stopping at the first). The test does not depend on the
+        // order of the face's vertices, so it takes them from its key.
+        std::vector<char> met(black.size(), 0), black_on_input(black.size(), 0);
+        parallel_blocks(tet_face_black.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t t = lo; t < hi; t++)
+                if (tet_face_black[t] != NONE)
+                    std::atomic_ref<char>(met[tet_face_black[t]])
+                        .store(1, std::memory_order_relaxed);
+        });
+        parallel_blocks(black.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t b = lo; b < hi; b++) {
+                if (!met[b]) continue;
+                const BSPface& face = faces[black[b]];
+                const int n_max = face_dominant_normal_component(face);
+                for (uint32_t constr : face.coplanar_constraints)
+                    if (constr < first_fake_constraint && overlaps(black_key[b], constr, n_max)) {
+                        black_on_input[b] = 1;
+                        break;
+                    }
+            }
+        });
+        parallel_blocks(num_tets, [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t k = lo; k < hi; k++)
+                for (int lf = 0; lf < 4; lf++) {
+                    const uint32_t b = tet_face_black[4 * k + lf];
+                    if (b != NONE && black_on_input[b]) tet_surface_faces[k] |= (uint8_t)(1 << lf);
+                }
+        });
+        return;
+    }
+
     // The black faces met, in order of the first tet face meeting them, and that tet face. A
     // surface face borders two kept cells, so it is met from two tets; the first is recorded.
     // In parallel: an atomic min gives each black face its first tet face, and the met list is
@@ -3161,47 +3207,6 @@ void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
         const int lf = (int)(t % 4);
         return std::array<uint32_t, 3>{tet[(lf + 1) & 3], tet[(lf + 2) & 3], tet[(lf + 3) & 3]};
     };
-    // Does the black face seen as tet face abc overlap input triangle constr?
-    auto overlaps = [&](const std::array<uint32_t, 3>& abc, uint32_t constr, int n_max) {
-        const uint32_t cID = 3 * constr;
-        return coplanar_tris_overlap(
-            *vertices[abc[0]],
-            *vertices[abc[1]],
-            *vertices[abc[2]],
-            *vertices[constraints_vrts[cID]],
-            *vertices[constraints_vrts[cID + 1]],
-            *vertices[constraints_vrts[cID + 2]],
-            n_max);
-    };
-
-    if (mode == FaceProvenance::FACES) {
-        // A black face met tiles input triangles iff it overlaps one of its genuine coplanar
-        // constraints (the test below, stopping at the first).
-        std::vector<char> on_input(met.size(), 0);
-        parallel_blocks(met.size(), [&](uint64_t lo, uint64_t hi) {
-            for (uint64_t m = lo; m < hi; m++) {
-                const std::array<uint32_t, 3> abc = tet_face(first[met[m]]);
-                const BSPface& face = faces[black[met[m]]];
-                const int n_max = face_dominant_normal_component(face);
-                for (uint32_t constr : face.coplanar_constraints)
-                    if (constr < first_fake_constraint && overlaps(abc, constr, n_max)) {
-                        on_input[m] = 1;
-                        break;
-                    }
-            }
-        });
-        std::vector<char> black_on_input(black.size(), 0);
-        for (uint64_t m = 0; m < met.size(); m++) black_on_input[met[m]] = on_input[m];
-        parallel_blocks(num_tets, [&](uint64_t lo, uint64_t hi) {
-            for (uint64_t k = lo; k < hi; k++)
-                for (int lf = 0; lf < 4; lf++) {
-                    const uint32_t b = tet_face_black[4 * k + lf];
-                    if (b != NONE && black_on_input[b]) tet_surface_faces[k] |= (uint8_t)(1 << lf);
-                }
-        });
-        return;
-    }
-
     // Per black face met, the coplanar group(s) it overlaps (positive-area SAT over its coplanar
     // constraints). Usually one group; more than one only where two exactly-coplanar surfaces
     // overlap on the same plane (all triangles overlapped by one face are on that face's single
