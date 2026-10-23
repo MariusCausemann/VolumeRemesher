@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -2700,7 +2701,7 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 }
 
 
-void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
+void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells, FaceProvenance face_provenance)
 {
     uint64_t tet_num = 0; // total number of tetrahedra in which the cell will
                           // be decomposed.
@@ -2922,7 +2923,7 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
 
     // Tag output tet faces that lie on the input surface with their input triangles.
     // Done after the winding-flip so local-face indices match the emitted vertex order.
-    trackFaceProvenance();
+    trackFaceProvenance(face_provenance);
     // Tag output tet edges/vertices coming from inserted edges/points.
     trackEdgePointProvenance();
 
@@ -3040,11 +3041,17 @@ void BSPcomplex::computeCoplanarGroups()
     }
 }
 
-void BSPcomplex::trackFaceProvenance()
+void BSPcomplex::trackFaceProvenance(FaceProvenance mode)
 {
-    computeCoplanarGroups();
-    // One list of output faces per coplanar group (symmetric with edge/point provenance).
-    triangle_provenance.assign(coplanar_group_size.size(), {});
+    triangle_provenance.clear();
+    tet_surface_faces.clear();
+    if (mode == FaceProvenance::NONE) return;
+    if (mode == FaceProvenance::GROUPS) {
+        computeCoplanarGroups();
+        // One list of output faces per coplanar group (symmetric with edge/point provenance).
+        triangle_provenance.assign(coplanar_group_size.size(), {});
+    } else
+        tet_surface_faces.assign(final_tets.size() / 4, 0);
 
     // Index every BLACK (on-surface) triangular face by its sorted vertex triple, so a tet face
     // can be matched to the BSP face it came from by exact integer identity. The faces are
@@ -3110,6 +3117,46 @@ void BSPcomplex::trackFaceProvenance()
         const int lf = (int)(t % 4);
         return std::array<uint32_t, 3>{tet[(lf + 1) & 3], tet[(lf + 2) & 3], tet[(lf + 3) & 3]};
     };
+    // Does the black face seen as tet face abc overlap input triangle constr?
+    auto overlaps = [&](const std::array<uint32_t, 3>& abc, uint32_t constr, int n_max) {
+        const uint32_t cID = 3 * constr;
+        return coplanar_tris_overlap(
+            *vertices[abc[0]],
+            *vertices[abc[1]],
+            *vertices[abc[2]],
+            *vertices[constraints_vrts[cID]],
+            *vertices[constraints_vrts[cID + 1]],
+            *vertices[constraints_vrts[cID + 2]],
+            n_max);
+    };
+
+    if (mode == FaceProvenance::FACES) {
+        // A black face met tiles input triangles iff it overlaps one of its genuine coplanar
+        // constraints (the test below, stopping at the first).
+        std::vector<char> on_input(met.size(), 0);
+        parallel_blocks(met.size(), [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t m = lo; m < hi; m++) {
+                const std::array<uint32_t, 3> abc = tet_face(first[met[m]]);
+                const BSPface& face = faces[black[met[m]]];
+                const int n_max = face_dominant_normal_component(face);
+                for (uint32_t constr : face.coplanar_constraints)
+                    if (constr < first_fake_constraint && overlaps(abc, constr, n_max)) {
+                        on_input[m] = 1;
+                        break;
+                    }
+            }
+        });
+        std::vector<char> black_on_input(black.size(), 0);
+        for (uint64_t m = 0; m < met.size(); m++) black_on_input[met[m]] = on_input[m];
+        parallel_blocks(num_tets, [&](uint64_t lo, uint64_t hi) {
+            for (uint64_t k = lo; k < hi; k++)
+                for (int lf = 0; lf < 4; lf++) {
+                    const uint32_t b = tet_face_black[4 * k + lf];
+                    if (b != NONE && black_on_input[b]) tet_surface_faces[k] |= (uint8_t)(1 << lf);
+                }
+        });
+        return;
+    }
 
     // Per black face met, the coplanar group(s) it overlaps (positive-area SAT over its coplanar
     // constraints). Usually one group; more than one only where two exactly-coplanar surfaces
@@ -3128,15 +3175,7 @@ void BSPcomplex::trackFaceProvenance()
                 // triangles [0, first_fake_constraint) contribute provenance, so a
                 // face lying only on caps stays untagged and is not reported.
                 if (constr >= first_fake_constraint) continue;
-                const uint32_t cID = 3 * constr;
-                if (coplanar_tris_overlap(
-                        *vertices[abc[0]],
-                        *vertices[abc[1]],
-                        *vertices[abc[2]],
-                        *vertices[constraints_vrts[cID]],
-                        *vertices[constraints_vrts[cID + 1]],
-                        *vertices[constraints_vrts[cID + 2]],
-                        n_max)) {
+                if (overlaps(abc, constr, n_max)) {
                     const uint32_t g = constraint_coplanar_group[constr];
                     if (std::find(gs.begin(), gs.end(), g) == gs.end()) gs.push_back(g);
                 }
@@ -3743,11 +3782,43 @@ static inline std::string rational_to_string(const bigrational& r)
 #endif
 }
 
+// The double nearest to r (ties to even). r.get_d() truncates; the result is decided by exact
+// comparisons with the midpoint of the two doubles around |r|.
+static double nearest_double(const bigrational& r)
+{
+    if (r.sgn() == 0) return 0.0;
+    const bigrational ar = r.sgn() > 0 ? r : r.negation();
+    double a = std::fabs(r.get_d());
+    while (a > 0 && bigrational(a).hasGreaterModule(ar)) a = std::nextafter(a, 0.0);
+    double b = std::nextafter(a, INFINITY);
+    while (!bigrational(b).hasGreaterModule(ar)) {
+        a = b;
+        b = std::nextafter(b, INFINITY);
+    } // a <= |r| < b
+    const bigrational mid = (bigrational(a) + bigrational(b)) * bigrational(0.5);
+    double n;
+    if (ar.hasGreaterModule(mid))
+        n = b;
+    else if (mid.hasGreaterModule(ar))
+        n = a;
+    else { // a tie: the one with an even last mantissa bit
+        uint64_t bits;
+        std::memcpy(&bits, &a, sizeof(bits));
+        n = (bits & 1) ? b : a;
+    }
+    return r.sgn() > 0 ? n : -n;
+}
+
 // Fill a VolumeOutput with the polyhedral cells (tetrahedrize == false) or the tetrahedra
 // plus their provenance (tetrahedrize == true) of the region the boolean opcode selects. This
 // is the body saveMesh had; it now calls it and hands the result to write_volume.
 void BSPcomplex::extractVolume(
-    const char bool_opcode, bool tetrahedrize, bool export_rational, VolumeOutput& out)
+    const char bool_opcode,
+    bool tetrahedrize,
+    bool export_rational,
+    VolumeOutput& out,
+    FaceProvenance face_provenance,
+    bool round_vertices)
 {
     out = VolumeOutput();
     out.tetrahedral = tetrahedrize;
@@ -3787,7 +3858,7 @@ void BSPcomplex::extractVolume(
     };
 
     if (tetrahedrize) {
-        makeTetrahedra();
+        makeTetrahedra(false, false, face_provenance);
 
         for (size_t i = 0; i < vrts_visit.size(); i++) vrts_visit[i] = 0;
         for (uint32_t t = 0; t < final_tets.size(); t++) vrts_visit[final_tets[t]] = 1;
@@ -3802,17 +3873,25 @@ void BSPcomplex::extractVolume(
 
         // Vertex coordinates. The approximate doubles, NOT the exact rationals: an exact
         // coordinate's text would depend on the bignum backend (see exact_coords below for the
-        // portable form), and they match read_TET_file's %lf parsing. Independent per vertex,
-        // so in parallel (the bigfloats of an implicit point stay inside its task).
+        // portable form), and they match read_TET_file's %lf parsing. With round_vertices, the
+        // nearest doubles of the exact coordinates of the implicit points (an explicit point's
+        // are its own). Independent per vertex, so in parallel (the bigfloats and rationals of
+        // an implicit point stay inside its task).
         out.coords.resize(3 * num_v);
         parallel_blocks(num_v, [&](uint64_t lo, uint64_t hi) {
-            for (uint64_t i = lo; i < hi; i++)
-                if (!vertices[out_vrts[i]]->getApproxXYZCoordinates(
-                        out.coords[3 * i],
-                        out.coords[3 * i + 1],
-                        out.coords[3 * i + 2],
-                        true))
+            bigrational rx, ry, rz;
+            for (uint64_t i = lo; i < hi; i++) {
+                const genericPoint* p = vertices[out_vrts[i]];
+                double* c = &out.coords[3 * i];
+                if (round_vertices && !p->isExplicit3D()) {
+                    if (!p->getExactXYZCoordinates(rx, ry, rz))
+                        ip_error("BSPcomplex::extractVolume: undefined vertex coordinates.\n");
+                    c[0] = nearest_double(rx);
+                    c[1] = nearest_double(ry);
+                    c[2] = nearest_double(rz);
+                } else if (!p->getApproxXYZCoordinates(c[0], c[1], c[2], true))
                     ip_error("BSPcomplex::extractVolume: undefined vertex coordinates.\n");
+            }
         });
 
         out.tets.reserve(final_tets.size());
@@ -3836,6 +3915,7 @@ void BSPcomplex::extractVolume(
             out.constraint_groups.push_back({off, constraint_coplanar_group[c]});
         }
         out.num_coplanar_groups = (uint32_t)coplanar_group_size.size();
+        out.surface_faces = std::move(tet_surface_faces);
 
         // Provenance of inserted edges: per input edge the output tet edges tiling it.
         out.edge_provenance.reserve(edge_provenance.size());
