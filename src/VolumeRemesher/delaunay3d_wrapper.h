@@ -1,6 +1,8 @@
 #pragma once
 
 #include <implicit_point.h>
+#include <algorithm>
+#include <thread>
 #include <vector>
 #include <iomanip>
 #include <cstring>

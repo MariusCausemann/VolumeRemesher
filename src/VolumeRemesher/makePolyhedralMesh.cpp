@@ -4,6 +4,7 @@
 #include <cfloat>
 #include <cstdio>
 #include "BSP.h"
+#include "parallel.h"
 #include "string.h"
 
 namespace vol_rem {
@@ -98,7 +99,9 @@ void remove_duplicated_points(
     uint32_t* diff)
 {
     // Sorting vertices by coordinates lexicographic order (x,y,z)
-    qsort(vrts_copy, *npts, sizeof(vertex_t), vertex_compare);
+    parallel_sort(vrts_copy, vrts_copy + *npts, [](const vertex_t& a, const vertex_t& b) {
+        return vertex_compare(&a, &b) < 0;
+    });
 
     // Count and memory position of duplicated vertices.
     uint32_t vrts_counter = 0;
@@ -571,6 +574,7 @@ BSPcomplex* makePolyhedralMesh(
 
     // Create Delaunay tetrahedrization of the vertices. Delaunay3D returns no tets, rather than
     // stopping, when the vertices do not span a volume (all coplanar or collinear).
+    mesh->setNumThreads(num_threads());
     mesh->tetrahedrize();
     if (mesh->numTets() == 0) ip_error("Input vertices do not define a volume.\n");
     // mesh->saveTET("delaunay.tet");

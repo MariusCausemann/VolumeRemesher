@@ -103,6 +103,55 @@ inline void parallel_blocks(uint64_t n, F&& fn)
 #endif
 }
 
+//
+//
+// std::sort(first, last, comp) on up to num_threads() threads: each thread sorts one
+// contiguous run, then pairs of runs are merged in parallel until one is left. Only for plain
+// data whose comparison cannot throw. Elements that compare equal may end up in any order, as
+// with std::sort.
+template <class T, class Compare>
+inline void parallel_sort(T* first, T* last, Compare comp)
+{
+    const uint64_t n = (uint64_t)(last - first);
+#ifdef VOLUMEREMESHER_SERIAL_TET
+    const uint64_t nruns = 1;
+#else
+    // Below 2^16 elements per thread the threads cost more than they save.
+    const uint64_t nruns = std::max<uint64_t>(1, std::min<uint64_t>(num_threads(), n >> 16));
+#endif
+    if (nruns == 1) {
+        std::sort(first, last, comp);
+        return;
+    }
+    auto run_tasks = [](uint64_t ntasks, auto&& task) {
+        std::vector<std::thread> pool;
+        pool.reserve(ntasks);
+        for (uint64_t t = 0; t < ntasks; t++) pool.emplace_back(task, t);
+        for (std::thread& t : pool) t.join();
+    };
+    std::vector<uint64_t> runs(nruns + 1);
+    for (uint64_t r = 0; r <= nruns; r++) runs[r] = n * r / nruns;
+    run_tasks(nruns, [&](uint64_t r) { std::sort(first + runs[r], first + runs[r + 1], comp); });
+
+    std::vector<T> buffer(n);
+    T* src = first;
+    T* dst = buffer.data();
+    while (runs.size() > 2) {
+        const uint64_t m = runs.size() - 1;
+        run_tasks((m + 1) / 2, [&](uint64_t p) {
+            const uint64_t b = runs[2 * p], mid = runs[std::min(2 * p + 1, m)],
+                           e = runs[std::min(2 * p + 2, m)];
+            std::merge(src + b, src + mid, src + mid, src + e, dst + b, comp);
+        });
+        std::vector<uint64_t> merged;
+        for (uint64_t r = 0; r < m; r += 2) merged.push_back(runs[r]);
+        merged.push_back(runs[m]);
+        runs.swap(merged);
+        std::swap(src, dst);
+    }
+    if (src != first) std::copy(src, src + n, first);
+}
+
 } // namespace vol_rem
 
 #endif // VOLUMEREMESHER_PARALLEL_H
