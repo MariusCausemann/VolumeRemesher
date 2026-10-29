@@ -40,6 +40,10 @@ bool_opcode: {U, I, D}
   I -> intersection (A^B),
   D -> difference (A\\B)
 
+The parallel passes run on VOLUMEREMESHER_NUM_THREADS threads if set, else on
+the CPUs the process may run on (its affinity mask on Linux; every CPU
+elsewhere).
+
 Example:
 mesh_generator ant.off U pig.off
 """
