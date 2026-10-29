@@ -762,7 +762,7 @@ NB_MODULE(_core, m)
         "get_num_threads",
         &vol_rem::num_threads,
         "Threads of the parallel passes: set_num_threads(n), else VOLUMEREMESHER_NUM_THREADS, "
-        "else the CPUs this process may run on (its affinity mask on Linux).");
+        "else the CPUs this process may run on (its affinity mask on Linux; every CPU elsewhere).");
 
     // --- process state, for the tests --------------------------------------------------------
     m.def(

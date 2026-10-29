@@ -27,6 +27,7 @@ set (SOURCES
     src/VolumeRemesher/BSP.cpp
     src/VolumeRemesher/inOutPartition.cpp
     src/VolumeRemesher/parallel.h
+    src/VolumeRemesher/parallel.cpp
     src/VolumeRemesher/exact_coords.h
     src/VolumeRemesher/io.h
     src/VolumeRemesher/io.cpp

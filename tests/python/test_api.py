@@ -199,11 +199,21 @@ def test_num_threads():
 
 
 def test_num_threads_environment_variable():
+    # Import the same package this process did (a relative PYTHONPATH would resolve against cwd).
+    from pathlib import Path
+
     env = dict(os.environ, VOLUMEREMESHER_NUM_THREADS="3")
+    pkg_parent = str(Path(vr.__file__).resolve().parents[1])
+    env["PYTHONPATH"] = pkg_parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     code = "import volume_remesher as vr; print(vr.get_num_threads())"
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "3"
+    # A value that is not a positive integer is ignored, with a note on stderr.
+    env["VOLUMEREMESHER_NUM_THREADS"] = "abc"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert "ignored" in out.stderr and int(out.stdout) >= 1
 
 
 def test_save_writes_the_sidecars(tmp_path):
