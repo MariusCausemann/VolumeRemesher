@@ -27,6 +27,7 @@ set (SOURCES
     src/VolumeRemesher/winding_number.h
     src/VolumeRemesher/winding_number.cpp
     src/VolumeRemesher/parallel.h
+    src/VolumeRemesher/parallel.cpp
     src/VolumeRemesher/exact_coords.h
     src/VolumeRemesher/io.h
     src/VolumeRemesher/io.cpp

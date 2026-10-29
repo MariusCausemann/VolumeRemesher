@@ -26,6 +26,7 @@ from ._api import (
     boolean,
     embed,
     embed_exact,
+    get_num_threads,
     has_graphcut,
     read_edges_off,
     read_obj_segments,
@@ -33,6 +34,7 @@ from ._api import (
     read_points_off,
     read_tet_mesh,
     remesh,
+    set_num_threads,
 )
 from ._core import VolumeRemesherError
 
@@ -55,6 +57,7 @@ __all__ = [
     "boolean",
     "embed",
     "embed_exact",
+    "get_num_threads",
     "has_graphcut",
     "read_edges_off",
     "read_obj_segments",
@@ -62,4 +65,5 @@ __all__ = [
     "read_points_off",
     "read_tet_mesh",
     "remesh",
+    "set_num_threads",
 ]
