@@ -39,6 +39,7 @@
 #include <VolumeRemesher/driver.h>
 #include <VolumeRemesher/embed.h>
 #include <VolumeRemesher/2d/embed2d.h>
+#include <VolumeRemesher/parallel.h>
 
 #include <cfenv>
 #include <cstdint>
@@ -260,6 +261,7 @@ MeshOptions make_options(
     bool fill_holes,
     bool keep_all_cells,
     MeshOutput::Kind output,
+    CellClassifier classifier,
     const std::string& face_provenance,
     bool round_vertices)
 {
@@ -271,6 +273,7 @@ MeshOptions make_options(
     o.fill_holes = fill_holes;
     o.keep_all_cells = keep_all_cells;
     o.output = output;
+    o.classifier = classifier;
     if (face_provenance == "groups")
         o.face_provenance = FaceProvenance::GROUPS;
     else if (face_provenance == "faces")
@@ -308,20 +311,14 @@ std::unique_ptr<Mesh> py_make_mesh(
     bool fill_holes,
     bool keep_all_cells,
     MeshOutput::Kind output,
+    CellClassifier classifier,
     const std::string& face_provenance,
     bool round_vertices)
 {
     const char op = parse_opcode(opcode);
     const MeshOptions opts = make_options(
-        verbose,
-        logging,
-        triangulate,
-        export_rational,
-        fill_holes,
-        keep_all_cells,
-        output,
-        face_provenance,
-        round_vertices);
+        verbose, logging, triangulate, export_rational, fill_holes, keep_all_cells, output,
+        classifier, face_provenance, round_vertices);
     // Copy the inputs while the GIL is held; the arrays may be temporaries.
     std::optional<TriMeshData> A, B;
     if (a) A = to_trimesh(*a);
@@ -360,20 +357,14 @@ std::unique_ptr<Mesh> py_embed_mesh(
     bool triangulate,
     bool export_rational,
     MeshOutput::Kind output,
+    CellClassifier classifier,
     const std::string& face_provenance,
     bool round_vertices)
 {
     const char op = parse_opcode(opcode);
     const MeshOptions opts = make_options(
-        verbose,
-        false,
-        triangulate,
-        export_rational,
-        false,
-        false,
-        output,
-        face_provenance,
-        round_vertices);
+        verbose, false, triangulate, export_rational, false, false, output, classifier,
+        face_provenance, round_vertices);
     TriMeshData A = to_trimesh(a);
     TetMeshData T = to_tetmesh(tet_mesh);
     std::optional<EdgeData> E;
@@ -752,38 +743,32 @@ NB_MODULE(_core, m)
             ".rational when exact coordinates were asked for), byte for byte as mesh_generator -2d.");
 
     // --- pipeline ----------------------------------------------------------------------------
+    nb::enum_<CellClassifier>(m, "CellClassifier",
+        "How cells are classified inside/outside: WINDING (the winding number; the default) or "
+        "GRAPH_CUT (the legacy min-cut, only in builds with VOLUMEREMESHER_WITH_GRAPHCUT).")
+        .value("WINDING", CellClassifier::WINDING_NUMBER)
+        .value("GRAPH_CUT", CellClassifier::GRAPH_CUT);
     m.def(
-        "make_mesh",
-        &py_make_mesh,
-        "a"_a.none(),
-        "name_a"_a.none(),
-        "opcode"_a,
-        "b"_a.none(),
-        "name_b"_a.none(),
-        "edges"_a.none(),
-        "points"_a.none(),
-        "verbose"_a,
-        "logging"_a,
-        "triangulate"_a,
-        "export_rational"_a,
-        "fill_holes"_a,
-        "keep_all_cells"_a,
-        "output"_a,
-        "face_provenance"_a = "groups",
+        "has_graphcut",
+        []() {
+#ifdef VOLUMEREMESHER_HAVE_GRAPHCUT
+            return true;
+#else
+            return false;
+#endif
+        },
+        "True when this module was built with the graph-cut classifier (not the case for the "
+        "wheels on PyPI: its third-party code is not LGPL compatible).");
+    m.def(
+        "make_mesh", &py_make_mesh, "a"_a.none(), "name_a"_a.none(), "opcode"_a, "b"_a.none(),
+        "name_b"_a.none(), "edges"_a.none(), "points"_a.none(), "verbose"_a, "logging"_a,
+        "triangulate"_a, "export_rational"_a, "fill_holes"_a, "keep_all_cells"_a, "output"_a,
+        "classifier"_a = CellClassifier::WINDING_NUMBER, "face_provenance"_a = "groups",
         "round_vertices"_a = false);
     m.def(
-        "embed_mesh",
-        &py_embed_mesh,
-        "a"_a,
-        "tet_mesh"_a,
-        "opcode"_a,
-        "edges"_a.none(),
-        "points"_a.none(),
-        "verbose"_a,
-        "triangulate"_a,
-        "export_rational"_a,
-        "output"_a,
-        "face_provenance"_a = "groups",
+        "embed_mesh", &py_embed_mesh, "a"_a, "tet_mesh"_a, "opcode"_a, "edges"_a.none(),
+        "points"_a.none(), "verbose"_a, "triangulate"_a, "export_rational"_a, "output"_a,
+        "classifier"_a = CellClassifier::WINDING_NUMBER, "face_provenance"_a = "groups",
         "round_vertices"_a = false);
     m.def(
         "arrange_2d", &py_arrange_2d, "points"_a, "segments"_a, "export_rational"_a, "verbose"_a);
@@ -822,6 +807,18 @@ NB_MODULE(_core, m)
     m.def(
         "embed_segments", &py_embed_segments, "points"_a, "segments"_a, "verbose"_a,
         "embed_seg_in_tri_mesh: the 2D arrangement with exact coordinates in lowest terms.");
+
+    // --- threads ---------------------------------------------------------------------------------
+    m.def(
+        "set_num_threads",
+        &vol_rem::set_num_threads,
+        "n"_a,
+        "Threads of the parallel passes; 0 restores the default (see get_num_threads).");
+    m.def(
+        "get_num_threads",
+        &vol_rem::num_threads,
+        "Threads of the parallel passes: set_num_threads(n), else VOLUMEREMESHER_NUM_THREADS, "
+        "else the CPUs this process may run on (its affinity mask on Linux; every CPU elsewhere).");
 
     // --- process state, for the tests --------------------------------------------------------
     m.def(

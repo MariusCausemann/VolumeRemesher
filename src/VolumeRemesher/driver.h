@@ -7,6 +7,7 @@
 #define VOLUMEREMESHER_DRIVER_H
 
 #include "2d/io2d.h"
+#include "BSP.h" // CellClassifier
 #include "io.h"
 #include "mesh_output.h"
 
@@ -23,8 +24,11 @@ struct MeshOptions
     bool triangulate = false; // -t  tetrahedralize the volume / triangulate the surface output
     bool export_rational = false; // -r  with -t, also carry the exact rational vertex coordinates
     bool fill_holes = false; // -f  cap open boundaries (solid-output path only)
-    bool keep_all_cells = false; // -a  skip the in/out min-cut, keep the whole domain
+    bool keep_all_cells = false; // -a  skip the in/out classification, keep the whole domain
     MeshOutput::Kind output = MeshOutput::VOLUME; // default / -s (SKIN) / -b (BLACK_FACES)
+    // -c winding|graphcut  how cells are classified inside/outside. GRAPH_CUT needs a build
+    // with VOLUMEREMESHER_WITH_GRAPHCUT, otherwise it is an error (ip_error).
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER;
     // With triangulate (no command line flags):
     FaceProvenance face_provenance = FaceProvenance::GROUPS; // how faces on the input are reported
     bool round_vertices = false; // coords: nearest doubles of the exact coordinates
@@ -50,8 +54,9 @@ MeshOutput make_mesh(
     const MeshOptions& opts);
 
 // `mesh_generator A.off X B.tet`: embed surface A (and optional extra edges/points) into the
-// tetrahedral mesh B, keeping the whole domain. bool_opcode is what the command line passed as
-// the separator; the writers apply it to the cell labels exactly as the tool always has.
+// tetrahedral mesh B; the cells of B cut by A are classified against A and only the inside ones
+// are written, as the tool always did. bool_opcode is what the command line passed as the
+// separator; the writers apply it to the cell labels exactly as the tool always has.
 MeshOutput embed_mesh(
     const TriMeshData& A,
     const TetMeshData& B,

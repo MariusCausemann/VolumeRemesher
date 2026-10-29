@@ -90,7 +90,8 @@ MeshOutput make_mesh(
         opts.logging,
         opts.fill_holes,
         opts.keep_all_cells,
-        has_extra ? &extra : nullptr);
+        has_extra ? &extra : nullptr,
+        opts.classifier);
     return extract_and_free(complex, bool_opcode, opts);
 }
 
@@ -116,7 +117,8 @@ MeshOutput embed_mesh(
         B.num_tets(),
         opts.verbose,
         false,
-        has_extra ? &extra : nullptr);
+        has_extra ? &extra : nullptr,
+        opts.classifier);
     return extract_and_free(complex, bool_opcode, opts);
 }
 

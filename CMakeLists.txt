@@ -10,8 +10,6 @@ option(VOLREM_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 
 #####################
 
-set(LGPL ON)
-
 # set the project name
 project(mesh_generator)
 
@@ -26,7 +24,10 @@ set (SOURCES
     src/VolumeRemesher/BSP.h
     src/VolumeRemesher/BSP.cpp
     src/VolumeRemesher/inOutPartition.cpp
+    src/VolumeRemesher/winding_number.h
+    src/VolumeRemesher/winding_number.cpp
     src/VolumeRemesher/parallel.h
+    src/VolumeRemesher/parallel.cpp
     src/VolumeRemesher/exact_coords.h
     src/VolumeRemesher/io.h
     src/VolumeRemesher/io.cpp
@@ -86,9 +87,6 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 	endif()
 # reserve enough stack size
 	target_link_options(${PROJECT_NAME}_lib PUBLIC "/STACK:8421376")
-	if(NOT LGPL)
-		target_compile_options(${PROJECT_NAME}_lib PUBLIC "/D USE_MAROTS_METHOD")
-	endif()
 else()
 # set standard optimization level
 	target_compile_options(${PROJECT_NAME}_lib PUBLIC -O2)
@@ -116,9 +114,26 @@ else()
 	if(NOT APPLE)
 		target_compile_options(${PROJECT_NAME}_lib PUBLIC -Wl,-z,stacksize=8421376)
 	endif()
-	if(NOT LGPL)
-		target_compile_options(${PROJECT_NAME}_lib PUBLIC "-DUSE_MAROTS_METHOD")
-	endif()
+endif()
+
+# --- Optional graph-cut classifier (NOT LGPL) ---------------------------------
+# The historical inside/outside classification is a min-cut over the dual graph of the cells,
+# using the GCO and maxflow libraries vendored in third_party/graph_cut. GCO's license allows
+# research use only (and cites a US patent on the algorithm); maxflow is GPL. Neither is
+# compatible with this library's LGPL, so the code is excluded from the default build, from
+# the Python wheels and from the source distribution. Turning this ON compiles it in and
+# makes `mesh_generator -c graphcut` (and the Python classifier="graphcut") available; the
+# resulting binary is then NOT distributable under the LGPL. The default classifier
+# (winding number, inOutPartition.cpp) has no such restriction.
+option(VOLUMEREMESHER_WITH_GRAPHCUT
+	"Compile the graph-cut cell classifier (third_party/graph_cut: research-only/GPL code)" OFF)
+if(VOLUMEREMESHER_WITH_GRAPHCUT)
+	message(WARNING "VOLUMEREMESHER_WITH_GRAPHCUT is ON: the build includes third_party/graph_cut, "
+		"whose license (GCO: research use only; maxflow: GPL) is not compatible with the LGPL. "
+		"Do not redistribute this binary under the LGPL.")
+	target_sources(${PROJECT_NAME}_lib PRIVATE src/VolumeRemesher/inOutPartition_graphcut.cpp)
+	target_include_directories(${PROJECT_NAME}_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/graph_cut)
+	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC VOLUMEREMESHER_HAVE_GRAPHCUT)
 endif()
 
 # --- Exact-arithmetic dependencies -------------------------------------------

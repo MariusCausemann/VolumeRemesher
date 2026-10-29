@@ -122,6 +122,31 @@ def _output_kind(output: str):
         ) from None
 
 
+_CLASSIFIERS = {
+    "winding": _core.CellClassifier.WINDING,
+    "graphcut": _core.CellClassifier.GRAPH_CUT,
+}
+
+
+def _classifier(classifier: str):
+    try:
+        return _CLASSIFIERS[classifier]
+    except KeyError:
+        raise ValueError(
+            f"classifier must be one of {sorted(_CLASSIFIERS)}, got {classifier!r}"
+        ) from None
+
+
+def has_graphcut() -> bool:
+    """Whether ``classifier="graphcut"`` is available in this build.
+
+    The legacy min-cut classifier depends on third-party code (GCO, maxflow) whose license is
+    not LGPL compatible, so it is compiled only when the module is built from source with
+    ``-DVOLUMEREMESHER_WITH_GRAPHCUT=ON``; the wheels on PyPI do not include it.
+    """
+    return bool(_core.has_graphcut())
+
+
 # --------------------------------------------------------------------------------------------
 # Readers
 # --------------------------------------------------------------------------------------------
@@ -449,6 +474,20 @@ def _wrap_mesh(m: _core.Mesh, face_provenance: str = "groups") -> Union[VolumeMe
 # --------------------------------------------------------------------------------------------
 # Pipeline
 # --------------------------------------------------------------------------------------------
+def set_num_threads(n: int) -> None:
+    """Run the parallel passes on ``n`` threads; ``0`` restores the default (:func:`get_num_threads`)."""
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    _core.set_num_threads(n)
+
+
+def get_num_threads() -> int:
+    """The threads of the parallel passes: :func:`set_num_threads`, else the
+    ``VOLUMEREMESHER_NUM_THREADS`` environment variable, else the CPUs this process may run on
+    (its affinity mask on Linux, e.g. under ``taskset`` or a batch scheduler)."""
+    return _core.get_num_threads()
+
+
 def remesh(
     surface: Optional[SurfaceLike] = None,
     *,
@@ -461,6 +500,7 @@ def remesh(
     face_provenance: str = "groups",
     round_vertices: bool = False,
     output: str = "volume",
+    classifier: str = "winding",
     verbose: bool = False,
     log: bool = False,
     name: Optional[str] = None,
@@ -468,7 +508,7 @@ def remesh(
     """Mesh the volume enclosed by a surface, resolving self-intersections and repairing it.
 
     Equivalent to ``mesh_generator surface.off [-e edges] [-p points] [-t] [-a] [-f] [-r]
-    [-s | -b]``.
+    [-s | -b] [-c classifier]``.
 
     Args:
         surface: an OFF path or ``(vertices, triangles)``. Optional if ``edges`` or ``points``
@@ -492,6 +532,12 @@ def remesh(
             doubles of the exact vertex positions instead of approximations (which can be an
             ulp or so off). No command line counterpart.
         output: ``"volume"`` (default), ``"skin"`` (``-s``) or ``"black_faces"`` (``-b``).
+        classifier: ``-c``. How cells are decided inside or outside: ``"winding"`` (default),
+            the winding number of the surface, exact for a closed and consistently oriented
+            input and the generalized winding number otherwise; or ``"graphcut"``, the legacy
+            area-weighted min-cut, available only when the module was built with
+            ``VOLUMEREMESHER_WITH_GRAPHCUT`` (see :func:`has_graphcut`; the PyPI wheels were
+            not, its third-party code is not LGPL compatible).
         verbose: ``-v``. Progress on the C stdout.
         log: ``-l``. Append a timing line to ``mesh_generator.log`` in the working directory.
         name: how the input is called in the log; defaults to its path, or ``"<array>"``.
@@ -510,7 +556,7 @@ def remesh(
         A, name or path or ("<array>" if A is not None else None), "0", None, None,
         _edges(edges, verbose), _points(points, verbose),
         verbose, log, tetrahedralize, exact, fill_holes, keep_all_cells, _output_kind(output),
-        face_provenance, round_vertices,
+        _classifier(classifier), face_provenance, round_vertices,
     )
     return _wrap_mesh(core, face_provenance)
 
@@ -529,6 +575,7 @@ def boolean(
     face_provenance: str = "groups",
     round_vertices: bool = False,
     output: str = "volume",
+    classifier: str = "winding",
     verbose: bool = False,
     log: bool = False,
     names: Optional[tuple[str, str]] = None,
@@ -550,7 +597,7 @@ def boolean(
         A, name_a, opcode, B, name_b,
         _edges(edges, verbose), _points(points, verbose),
         verbose, log, tetrahedralize, exact, fill_holes, keep_all_cells, _output_kind(output),
-        face_provenance, round_vertices,
+        _classifier(classifier), face_provenance, round_vertices,
     )
     return _wrap_mesh(core, face_provenance)
 
@@ -566,22 +613,25 @@ def embed(
     face_provenance: str = "groups",
     round_vertices: bool = False,
     output: str = "volume",
+    classifier: str = "winding",
     verbose: bool = False,
 ) -> Union[VolumeMesh, SurfaceMesh]:
     """Embed a surface (and optional edges/points) into an existing tetrahedral mesh, cutting
     its tetrahedra so every input triangle is a union of output faces.
 
-    Equivalent to ``mesh_generator surface.off U mesh.tet [-e] [-p] [-t] [-r] [-s | -b]``
-    (the boolean letter is a separator the tool requires and does not use). The tet mesh must
-    be convex and every input vertex must lie strictly inside it, or coincide with one of its
-    vertices. The whole domain is kept. The other arguments are those of :func:`remesh`.
+    Equivalent to ``mesh_generator surface.off U mesh.tet [-e] [-p] [-t] [-r] [-s | -b]
+    [-c classifier]`` (the boolean letter is a separator the tool requires and does not use).
+    The tet mesh must be convex and every input vertex must lie strictly inside it, or coincide
+    with one of its vertices. As with the tool, the cut cells are classified against the
+    surface (``classifier``, see :func:`remesh`) and only the inside ones are returned. The other arguments are those of :func:`remesh`.
     """
     _check_tet_options(tetrahedralize, exact, face_provenance, round_vertices)
     A, _ = _surface(surface, verbose)
     T = _tetmesh(tet_mesh, verbose)
     core = _core.embed_mesh(
         A, T, "0", _edges(edges, verbose), _points(points, verbose),
-        verbose, tetrahedralize, exact, _output_kind(output), face_provenance, round_vertices,
+        verbose, tetrahedralize, exact, _output_kind(output), _classifier(classifier),
+        face_provenance, round_vertices,
     )
     return _wrap_mesh(core, face_provenance)
 

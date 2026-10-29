@@ -11,9 +11,20 @@
 
 namespace vol_rem {
 
+// The number of threads parallel_blocks runs on: set_num_threads(n) when n > 0, else the
+// VOLUMEREMESHER_NUM_THREADS environment variable, else the CPUs this process may run on. On
+// Linux that is its affinity mask (taskset, cpuset cgroups, a batch scheduler's binding), which
+// std::thread::hardware_concurrency() ignores: it counts every CPU of the machine; on macOS and
+// Windows it is every CPU of the machine. Defined in parallel.cpp, so that the setting lives in
+// one place even when the library is linked as a shared object into several modules.
+unsigned num_threads();
+
+// Set the number of threads parallel_blocks runs on; 0 restores the default (num_threads).
+void set_num_threads(unsigned n);
+
 //
 //
-// Run fn over blocks of [0,n) on std::thread::hardware_concurrency() threads, dynamically
+// Run fn over blocks of [0,n) on num_threads() threads (at most one per block), dynamically
 // scheduled (atomic block-fetch) so uneven per-item cost stays balanced. Falls back to a
 // serial call for small n or a single hardware thread. Compiling with VOLUMEREMESHER_SERIAL_TET
 // (CMake: -DVOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION=OFF) forces the serial path everywhere.
@@ -39,9 +50,9 @@ inline void parallel_blocks(uint64_t n, F&& fn)
 #ifdef VOLUMEREMESHER_SERIAL_TET
     fn(uint64_t(0), n);
 #else
-    unsigned nthreads = std::thread::hardware_concurrency();
-    if (nthreads == 0) nthreads = 1;
-    if (nthreads == 1 || n < 512) {
+    const uint64_t block = 64;
+    const unsigned nthreads = (unsigned)std::min<uint64_t>(num_threads(), (n + block - 1) / block);
+    if (nthreads <= 1 || n < 512) {
         fn(uint64_t(0), n);
         return;
     }
@@ -49,7 +60,6 @@ inline void parallel_blocks(uint64_t n, F&& fn)
     std::atomic<bool> failed{false};
     std::exception_ptr error;
     std::mutex error_mutex;
-    const uint64_t block = 64;
     auto runner = [&]() {
         try {
             uint64_t i;

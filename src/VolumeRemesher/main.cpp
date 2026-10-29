@@ -43,6 +43,7 @@ static int run(int argc, char** argv)
     bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
     char* edge_file = NULL; // -e: extra edges to insert
     char* point_file = NULL; // -p: extra points to insert
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER; // -c winding|graphcut
     char* fileA_name = NULL;
     char* fileB_name = NULL;
     char bool_opcode = '0';
@@ -62,18 +63,25 @@ static int run(int argc, char** argv)
                "-r = with -t, also write exact-rational vertex coords to 'volume.tet.rational'\n"
                "-2d = 2D mode: read an OBJ line soup (v/l records) and write the arrangement\n"
                "     of the input segments as a triangulation to 'triangulation.off'\n"
-               "-a = keep all cells: skip the in/out min-cut and tetrahedralize the whole\n"
-               "     domain, so the -t surface tracking is exact (no cells are deleted)\n"
+               "-a = keep all cells: skip the in/out classification and tetrahedralize the\n"
+               "     whole domain, so the -t surface tracking is exact (no cells are deleted)\n"
                "-f = fill holes: cap open boundaries with ear-clipped triangles (off by\n"
-               "     default; only affects the solid-output min-cut path)\n"
+               "     default; only affects the solid-output path)\n"
                "-e edges.off  = also insert these edges into the output (implies -a); OFF\n"
                "     with 'nv ne 0' then vertices then edge records '2 i j'\n"
                "-p points.off = also insert these points into the output (implies -a); OFF\n"
                "     with 'np 0 0' then vertex lines\n"
+               "-c winding|graphcut = how cells are classified inside/outside (default\n"
+               "     winding: exact winding number, generalized winding number for open or\n"
+               "     inconsistently oriented input; graphcut: the area-weighted min-cut, only\n"
+               "     in builds configured with VOLUMEREMESHER_WITH_GRAPHCUT)\n"
                "bool_opcode: {U, I, D}\n"
                "  U -> union (AuB),\n"
                "  I -> intersection (A^B),\n"
                "  D -> difference (A\\B)\n\n"
+               "The parallel passes run on VOLUMEREMESHER_NUM_THREADS threads if set, else on\n"
+               "the CPUs the process may run on (its affinity mask on Linux; every CPU\n"
+               "elsewhere).\n\n"
                "Example:\n"
                "mesh_generator ant.off U pig.off\n");
         return 0;
@@ -109,6 +117,15 @@ static int run(int argc, char** argv)
             } else if (argv[i][1] == 'p') {
                 if (i + 1 >= argc) ip_error("-p requires a point file argument\n");
                 point_file = argv[++i];
+            } else if (argv[i][1] == 'c') {
+                if (i + 1 >= argc) ip_error("-c requires a classifier argument\n");
+                const char* name = argv[++i];
+                if (!strcmp(name, "winding"))
+                    classifier = CellClassifier::WINDING_NUMBER;
+                else if (!strcmp(name, "graphcut"))
+                    classifier = CellClassifier::GRAPH_CUT;
+                else
+                    ip_error("Unknown classifier: use -c winding or -c graphcut\n");
             } else
                 ip_error("Unknown option\n");
         } else if (fileA_name == NULL)
@@ -194,6 +211,7 @@ static int run(int argc, char** argv)
     opts.export_rational = export_rational;
     opts.fill_holes = fill_holes;
     opts.keep_all_cells = keep_all_cells;
+    opts.classifier = classifier;
     // Black faces win over the skin when both are asked for, as they always did.
     opts.output = blackfaces ? MeshOutput::BLACK_FACES
                              : (surfmesh ? MeshOutput::SKIN : MeshOutput::VOLUME);

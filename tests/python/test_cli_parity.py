@@ -20,6 +20,8 @@ CASES = [
     (["sphere.off", "-t"], ["volume.tet", "volume.tet.triangleprov", "volume.tet.groups"]),
     (["sphere.off", "-t", "-r"], ["volume.tet", "volume.tet.rational"]),
     (["sphere.off", "-t", "-a"], ["volume.tet"]),
+    (["sphere.off", "-c", "winding"], ["volume.msh"]),
+    (["bunny.off", "-t", "-c", "winding"], ["volume.tet", "volume.tet.triangleprov", "volume.tet.groups"]),
     (["open_box.off", "-f"], ["volume.msh"]),
     (["open_box.off", "-f", "-t"], ["volume.tet"]),
     (["sphere.off", "-s"], ["skin.off"]),
@@ -78,6 +80,8 @@ def test_same_files_as_mesh_generator(mesh_generator, argv, files, tmp_path):
     ["sphere.off", "-e"],
     ["sphere.off", "U"],
     ["-2d"],
+    ["sphere.off", "-c"],
+    ["sphere.off", "-c", "mincut"],
 ])
 def test_same_failure_as_mesh_generator(mesh_generator, argv, tmp_path):
     argv = [str(MODELS / a) if a == "sphere.off" else a for a in argv]
@@ -86,6 +90,27 @@ def test_same_failure_as_mesh_generator(mesh_generator, argv, tmp_path):
     assert rc.returncode != 0
     assert rp.returncode != 0
     assert rp.stderr.strip() == rc.stderr.strip()
+
+
+def test_graphcut_classifier_parity(mesh_generator, tmp_path):
+    """-c graphcut: the same volume.msh as the Python module when the build has the legacy
+    classifier, the same error message when it does not."""
+    import volume_remesher as vr
+
+    argv = [str(MODELS / "sphere.off"), "-c", "graphcut"]
+    cli = tmp_path / "cli"
+    py = tmp_path / "py"
+    cli.mkdir()
+    py.mkdir()
+    rc = run_tool(mesh_generator, argv, cwd=cli)
+    rp = run_python_cli(argv, cwd=py)
+    if vr.has_graphcut():
+        assert rc.returncode == 0 and rp.returncode == 0, rc.stderr + rp.stderr
+        assert filecmp.cmp(cli / "volume.msh", py / "volume.msh", shallow=False)
+    else:
+        assert rc.returncode != 0 and rp.returncode != 0
+        assert "VOLUMEREMESHER_WITH_GRAPHCUT" in rc.stderr
+        assert rp.stderr.strip() == rc.stderr.strip()
 
 
 def test_usage_text(mesh_generator, tmp_path):

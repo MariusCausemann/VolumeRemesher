@@ -30,6 +30,26 @@
 #define INTERNAL_AB 3
 #define EXTERNAL 0
 
+// How the cells are classified inside/outside the input surface(s), see inOutPartition.cpp.
+//  WINDING_NUMBER -> winding number: exact on the BSP for closed, consistently oriented input, the
+//               generalized winding number otherwise. The default.
+//  GRAPH_CUT -> the historical area-weighted min-cut. Available only when the library was built
+//               with VOLUMEREMESHER_WITH_GRAPHCUT (its third-party code is not LGPL compatible).
+// (WINDING_NUMBER, not WINDING: <wingdi.h> defines WINDING as a macro, and the Python module
+// includes <windows.h>.)
+enum class CellClassifier : uint8_t { WINDING_NUMBER = 0, GRAPH_CUT = 1 };
+
+namespace vol_rem {
+// Returns 1 if point is on the boundary of the triangle, 2 if it is in the interior, 0 otherwise
+// (BSP.cpp; xyz is the dominant normal component the test projects along).
+int localizedPointInTriangle(
+    const genericPoint& P,
+    const genericPoint& A,
+    const genericPoint& B,
+    const genericPoint& C,
+    int xyz);
+} // namespace vol_rem
+
 // To manage with constraints edges
 #define ENDPTS_T pair<uint32_t, uint32_t>
 #define NEW_ENDPTS make_pair(UINT32_MAX, UINT32_MAX)
@@ -361,13 +381,9 @@ public:
     // Return the overall number of bytes occupied by the BSP structure
     size_t getStructureSize() const;
 
-    // Complex elements relations
-    inline void assigne_edge_to_face(uint64_t edge, uint64_t face);
-
     // Explore the complex
     // uint32_t getFaceVertex(const BSPface& f, uint32_t v_ind);
     // bool faceHasVertex(const BSPface& f, uint32_t v_ind);
-    uint64_t faceSharedWithCell(uint64_t c1, uint64_t c2);
     uint64_t count_cellEdges(const BSPcell& cell);
     uint32_t count_cellVertices(const BSPcell& cell, uint64_t* num_cellEdges);
     void list_cellEdges(BSPcell& cell, vector<uint64_t>& cell_edges);
@@ -378,7 +394,6 @@ public:
     void list_cellVertices_ts(const BSPcell& cell, vector<uint32_t>& cell_vrts) const;
     void list_faceVertices(BSPface& face, vector<uint32_t>& face_vrts);
     void fill_cell_locDS(BSPcell& cell, vector<uint64_t>& cell_edges, vector<uint32_t>& cell_vrts);
-    inline uint64_t find_face_edge(const BSPface& face, uint32_t v, uint32_t u);
     uint64_t count_cellFaces_inc_cellVrt(const BSPcell& cell, uint32_t v);
     void cell_VFrelation(const BSPcell& cell, uint32_t v, vector<uint64_t>& v_incFaces_ind);
     void
@@ -408,15 +423,6 @@ public:
 
     // Upload Delaunay triangolation
     uint64_t removing_ghost_tets(const TetMesh* mesh, vector<uint64_t>& new_order);
-    uint64_t add_tetEdge(
-        const TetMesh* mesh,
-        uint32_t e0,
-        uint32_t e1,
-        uint64_t tet_ind,
-        const vector<uint64_t>& new_order);
-    inline uint64_t
-    add_tetFace(uint32_t v0, uint32_t v1, uint32_t v2, uint64_t cell_ind, uint64_t adjCell_ind);
-    inline bool tet_face_isNew(uint64_t tet_ind, uint64_t adjTet_ind, uint64_t adjCell_ind);
     inline void fill_face_colour(
         uint64_t tet_ind,
         uint64_t face_ind,
@@ -467,8 +473,22 @@ public:
     is_baricenter_inFace(const BSPface& face, const explicitPoint3D& face_center, int max_normComp);
     COLOUR_T blackAB_or_white(uint64_t face_ind, bool two_input);
 
-    // Interior-exterior constraint surface
-    void constraintsSurface_complexPartition(bool two_files = false);
+    // Interior-exterior constraint surface (inOutPartition.cpp)
+    void constraintsSurface_complexPartition(
+        bool two_files = false,
+        CellClassifier classifier = CellClassifier::WINDING_NUMBER,
+        bool verbose = false);
+    uint32_t cell_vertex_off_face(const BSPface& f, uint64_t cell_ind);
+    // Winding-number classifier
+    void covering_constraints(uint64_t face_ind, CONSTR_GROUP_T group, std::vector<uint32_t>& out);
+    int face_winding_jump(uint64_t face_ind, CONSTR_GROUP_T group, const std::vector<uint8_t>& flip);
+    void markInternalCells_winding(
+        uint32_t skin_colour,
+        CONSTR_GROUP_T group,
+        uint32_t internal_label,
+        bool verbose);
+    // Graph-cut classifier (inOutPartition_graphcut.cpp, only with VOLUMEREMESHER_WITH_GRAPHCUT)
+    void partition_graphcut(bool two_files);
     void markInternalCells(
         uint32_t skin_colour,
         uint32_t internal_label,
@@ -553,7 +573,9 @@ BSPcomplex* makePolyhedralMesh(
     bool keep_all_cells = false,
     // Optional extra edges/points to force into the output (see insert_edges_and_points).
     // When present, keep_all_cells is implied so they survive into the tetrahedralization.
-    const extra_features_t* extra = nullptr);
+    const extra_features_t* extra = nullptr,
+    // How cells are classified inside/outside (ignored with keep_all_cells).
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER);
 
 /// <summary>
 /// Same as above, but file B represents a tetrahedral mesh where A will be embedded
@@ -580,7 +602,9 @@ BSPcomplex* remakePolyhedralMesh(
     bool verbose,
     bool no_class = false,
     // Optional extra edges/points to force into the embedding (see insert_edges_and_points).
-    const extra_features_t* extra = nullptr);
+    const extra_features_t* extra = nullptr,
+    // How cells are classified inside/outside (ignored with no_class).
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER);
 } // namespace vol_rem
 
 #endif /* BSP_h */
