@@ -420,7 +420,8 @@ BSPcomplex* makePolyhedralMesh(
     bool logging,
     bool fill_holes,
     bool keep_all_cells,
-    const extra_features_t* extra)
+    const extra_features_t* extra,
+    CellClassifier classifier)
 {
     // Inserted edges/points only survive if we keep every cell (the min-cut would
     // otherwise delete the cells they bound), so they imply keep_all_cells.
@@ -755,7 +756,7 @@ BSPcomplex* makePolyhedralMesh(
         // them all without any further plumbing.
         for (BSPcell& c : complex.cells) c.place = INTERNAL_A;
     } else
-        complex.constraintsSurface_complexPartition(bool_opcode != '0');
+        complex.constraintsSurface_complexPartition(bool_opcode != '0', classifier, verbose);
 
     clock_t time8 = clock();
     if (verbose) printf("\tInt-ext class. %f s\n", (double)(time8 - time7) / CLOCKS_PER_SEC);
@@ -811,7 +812,8 @@ BSPcomplex* remakePolyhedralMesh(
     uint32_t ntet_B,
     bool verbose,
     bool no_class,
-    const extra_features_t* extra)
+    const extra_features_t* extra,
+    CellClassifier classifier)
 {
     if (verbose) printf("\nEmbed trimesh into tetmesh.\n\n");
 
@@ -1091,7 +1093,7 @@ BSPcomplex* remakePolyhedralMesh(
 
     //-Classification:intrenal/external cells-------------------------------------
     if (!no_class) {
-        complex.constraintsSurface_complexPartition(false);
+        complex.constraintsSurface_complexPartition(false, classifier, verbose);
 
         clock_t time8 = clock();
         if (verbose) printf("\tInt-ext class. %f s\n", (double)(time8 - time7) / CLOCKS_PER_SEC);

@@ -259,7 +259,8 @@ MeshOptions make_options(
     bool export_rational,
     bool fill_holes,
     bool keep_all_cells,
-    MeshOutput::Kind output)
+    MeshOutput::Kind output,
+    CellClassifier classifier)
 {
     MeshOptions o;
     o.verbose = verbose;
@@ -269,6 +270,7 @@ MeshOptions make_options(
     o.fill_holes = fill_holes;
     o.keep_all_cells = keep_all_cells;
     o.output = output;
+    o.classifier = classifier;
     return o;
 }
 
@@ -296,11 +298,13 @@ std::unique_ptr<Mesh> py_make_mesh(
     bool export_rational,
     bool fill_holes,
     bool keep_all_cells,
-    MeshOutput::Kind output)
+    MeshOutput::Kind output,
+    CellClassifier classifier)
 {
     const char op = parse_opcode(opcode);
     const MeshOptions opts = make_options(
-        verbose, logging, triangulate, export_rational, fill_holes, keep_all_cells, output);
+        verbose, logging, triangulate, export_rational, fill_holes, keep_all_cells, output,
+        classifier);
     // Copy the inputs while the GIL is held; the arrays may be temporaries.
     std::optional<TriMeshData> A, B;
     if (a) A = to_trimesh(*a);
@@ -338,11 +342,12 @@ std::unique_ptr<Mesh> py_embed_mesh(
     bool verbose,
     bool triangulate,
     bool export_rational,
-    MeshOutput::Kind output)
+    MeshOutput::Kind output,
+    CellClassifier classifier)
 {
     const char op = parse_opcode(opcode);
-    const MeshOptions opts =
-        make_options(verbose, false, triangulate, export_rational, false, false, output);
+    const MeshOptions opts = make_options(
+        verbose, false, triangulate, export_rational, false, false, output, classifier);
     TriMeshData A = to_trimesh(a);
     TetMeshData T = to_tetmesh(tet_mesh);
     std::optional<EdgeData> E;
@@ -706,13 +711,31 @@ NB_MODULE(_core, m)
             ".rational when exact coordinates were asked for), byte for byte as mesh_generator -2d.");
 
     // --- pipeline ----------------------------------------------------------------------------
+    nb::enum_<CellClassifier>(m, "CellClassifier",
+        "How cells are classified inside/outside: WINDING (the winding number; the default) or "
+        "GRAPH_CUT (the legacy min-cut, only in builds with VOLUMEREMESHER_WITH_GRAPHCUT).")
+        .value("WINDING", CellClassifier::WINDING)
+        .value("GRAPH_CUT", CellClassifier::GRAPH_CUT);
+    m.def(
+        "has_graphcut",
+        []() {
+#ifdef VOLUMEREMESHER_HAVE_GRAPHCUT
+            return true;
+#else
+            return false;
+#endif
+        },
+        "True when this module was built with the graph-cut classifier (not the case for the "
+        "wheels on PyPI: its third-party code is not LGPL compatible).");
     m.def(
         "make_mesh", &py_make_mesh, "a"_a.none(), "name_a"_a.none(), "opcode"_a, "b"_a.none(),
         "name_b"_a.none(), "edges"_a.none(), "points"_a.none(), "verbose"_a, "logging"_a,
-        "triangulate"_a, "export_rational"_a, "fill_holes"_a, "keep_all_cells"_a, "output"_a);
+        "triangulate"_a, "export_rational"_a, "fill_holes"_a, "keep_all_cells"_a, "output"_a,
+        "classifier"_a = CellClassifier::WINDING);
     m.def(
         "embed_mesh", &py_embed_mesh, "a"_a, "tet_mesh"_a, "opcode"_a, "edges"_a.none(),
-        "points"_a.none(), "verbose"_a, "triangulate"_a, "export_rational"_a, "output"_a);
+        "points"_a.none(), "verbose"_a, "triangulate"_a, "export_rational"_a, "output"_a,
+        "classifier"_a = CellClassifier::WINDING);
     m.def(
         "arrange_2d", &py_arrange_2d, "points"_a, "segments"_a, "export_rational"_a, "verbose"_a);
 

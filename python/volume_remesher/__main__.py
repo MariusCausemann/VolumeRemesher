@@ -27,14 +27,18 @@ Command line arguments:
 -r = with -t, also write exact-rational vertex coords to 'volume.tet.rational'
 -2d = 2D mode: read an OBJ line soup (v/l records) and write the arrangement
      of the input segments as a triangulation to 'triangulation.off'
--a = keep all cells: skip the in/out min-cut and tetrahedralize the whole
-     domain, so the -t surface tracking is exact (no cells are deleted)
+-a = keep all cells: skip the in/out classification and tetrahedralize the
+     whole domain, so the -t surface tracking is exact (no cells are deleted)
 -f = fill holes: cap open boundaries with ear-clipped triangles (off by
-     default; only affects the solid-output min-cut path)
+     default; only affects the solid-output path)
 -e edges.off  = also insert these edges into the output (implies -a); OFF
      with 'nv ne 0' then vertices then edge records '2 i j'
 -p points.off = also insert these points into the output (implies -a); OFF
      with 'np 0 0' then vertex lines
+-c winding|graphcut = how cells are classified inside/outside (default
+     winding: exact winding number, generalized winding number for open or
+     inconsistently oriented input; graphcut: the area-weighted min-cut, only
+     in builds configured with VOLUMEREMESHER_WITH_GRAPHCUT)
 bool_opcode: {U, I, D}
   U -> union (AuB),
   I -> intersection (A^B),
@@ -61,6 +65,7 @@ def _run(argv: list[str]) -> int:
     export_rational = fill_holes = two_d = keep_all_cells = False
     edge_file: Optional[str] = None
     point_file: Optional[str] = None
+    classifier = _core.CellClassifier.WINDING
     file_a: Optional[str] = None
     file_b: Optional[str] = None
     bool_opcode = "0"
@@ -101,6 +106,16 @@ def _run(argv: list[str]) -> int:
                     _error("-p requires a point file argument\n")
                 i += 1
                 point_file = argv[i]
+            elif arg[1:2] == "c":
+                if i + 1 >= len(argv):
+                    _error("-c requires a classifier argument\n")
+                i += 1
+                if argv[i] == "winding":
+                    classifier = _core.CellClassifier.WINDING
+                elif argv[i] == "graphcut":
+                    classifier = _core.CellClassifier.GRAPH_CUT
+                else:
+                    _error("Unknown classifier: use -c winding or -c graphcut\n")
             else:
                 _error("Unknown option\n")
         elif file_a is None:
@@ -173,12 +188,14 @@ def _run(argv: list[str]) -> int:
     if embedsurf:
         T = _core.read_tet(file_b, verbose) if file_b_is_tet else _core.read_medit(file_b, verbose)
         mesh = _core.embed_mesh(
-            A, T, bool_opcode, edges, points, verbose, triangulate, export_rational, output
+            A, T, bool_opcode, edges, points, verbose, triangulate, export_rational, output,
+            classifier,
         )
     else:
         mesh = _core.make_mesh(
             A, file_a, bool_opcode, B, file_b, edges, points,
             verbose, logging, triangulate, export_rational, fill_holes, keep_all_cells, output,
+            classifier,
         )
 
     print("Writing output file...")
