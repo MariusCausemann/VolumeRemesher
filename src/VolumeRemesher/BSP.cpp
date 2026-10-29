@@ -3046,7 +3046,9 @@ void BSPcomplex::computeCoplanarGroups()
 template <class I, class F>
 static std::vector<I> parallel_select(uint64_t n, F&& keep)
 {
-    const uint64_t chunk = 4096, num_chunks = (n + chunk - 1) / chunk;
+    // parallel_blocks runs serially below 512 items (chunks here) and hands out 64 at a time, so
+    // with 256 items per chunk the selection goes parallel from ~128k items, in blocks of 16k.
+    const uint64_t chunk = 256, num_chunks = (n + chunk - 1) / chunk;
     std::vector<uint64_t> start(num_chunks + 1, 0);
     parallel_blocks(num_chunks, [&](uint64_t lo, uint64_t hi) {
         for (uint64_t c = lo; c < hi; c++)
