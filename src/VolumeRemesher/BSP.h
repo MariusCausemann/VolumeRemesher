@@ -504,7 +504,7 @@ public:
 
     // Fills triangle_provenance: for each coplanar group, the output tet faces tiling it
     // (GROUPS), or tet_surface_faces (FACES). Called from makeTetrahedra.
-    void trackFaceProvenance(FaceProvenance mode);
+    void trackFaceProvenance(FaceProvenance mode = FaceProvenance::GROUPS);
 };
 
 /// <summary>

@@ -97,3 +97,21 @@ def test_option_errors():
         vr.remesh(p, face_provenance="faces")
     with pytest.raises(ValueError):
         vr.remesh(p, round_vertices=True)
+
+
+def test_save_skips_the_provenance_sidecars_it_did_not_compute(tmp_path):
+    """With face_provenance="faces" or "none" there is no grouped provenance, so save() writes no
+    .triangleprov / .groups (the tool always computes them, so its files are unaffected)."""
+    import os
+
+    import volume_remesher as vr
+    from conftest import model
+
+    p = model("sphere.off")
+    vr.remesh(p, tetrahedralize=True).save(tmp_path / "groups.tet")
+    vr.remesh(p, tetrahedralize=True, face_provenance="faces").save(tmp_path / "faces.tet")
+    vr.remesh(p, tetrahedralize=True, face_provenance="none").save(tmp_path / "none.tet")
+    names = sorted(os.listdir(tmp_path))
+    assert "groups.tet.triangleprov" in names and "groups.tet.groups" in names
+    assert "faces.tet" in names and "faces.tet.triangleprov" not in names and "faces.tet.groups" not in names
+    assert "none.tet" in names and "none.tet.triangleprov" not in names and "none.tet.groups" not in names

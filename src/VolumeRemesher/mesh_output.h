@@ -55,6 +55,9 @@ struct VolumeOutput
     // FaceProvenance::FACES: per tet, bit i set iff its face opposite vertex i tiles input
     // triangles (the faces triangle_provenance lists, marked on both their tets).
     std::vector<uint8_t> surface_faces;
+    // Which of the above was computed. write_volume writes the .triangleprov and .groups
+    // sidecars only for GROUPS (the tool's behaviour); they would otherwise be empty.
+    FaceProvenance face_provenance = FaceProvenance::GROUPS;
     struct EdgeProvenance
     {
         uint32_t edge_id;

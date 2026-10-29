@@ -270,6 +270,8 @@ class VolumeMesh:
         A tetrahedral mesh gets the ``.tet`` format plus the ``.triangleprov``, ``.groups``,
         ``.edgeprov`` and ``.pointprov`` sidecars (and ``.rational`` when built with
         ``exact=True``); a polyhedral mesh gets the ``.msh`` format. Byte-identical to the tool.
+        With ``face_provenance="faces"`` or ``"none"`` the ``.triangleprov`` and ``.groups``
+        sidecars are not written (the tool always computes the grouped provenance).
         """
         self._core_mesh.save(os.fspath(path))
 

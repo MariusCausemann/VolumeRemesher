@@ -3835,29 +3835,37 @@ static inline std::string rational_to_string(const bigrational& r)
 
 // The double nearest to r (ties to even). r.get_d() truncates; the result is decided by exact
 // comparisons with the midpoint of the two doubles around |r|.
+// Only the operations both exact backends share (NFG's bigrational and, with
+// USE_GNU_GMP_CLASSES, mpq_class): construction from a double, +, -, and the comparisons.
 static double nearest_double(const bigrational& r)
 {
-    if (r.sgn() == 0) return 0.0;
-    const bigrational ar = r.sgn() > 0 ? r : r.negation();
+    const bigrational zero(0.0);
+    if (r == zero) return 0.0;
+    const bool negative = r < zero;
+    const bigrational ar = negative ? zero - r : r;
     double a = std::fabs(r.get_d());
-    while (a > 0 && bigrational(a).hasGreaterModule(ar)) a = std::nextafter(a, 0.0);
+    // get_d() returns an infinity for a magnitude outside the double range (NFG: a binary
+    // exponent beyond +-1022); such a coordinate cannot be rounded to a double at all.
+    if (!std::isfinite(a)) ip_error("nearest_double: coordinate outside the double range\n");
+    while (a > 0 && bigrational(a) > ar) a = std::nextafter(a, 0.0);
     double b = std::nextafter(a, INFINITY);
-    while (!bigrational(b).hasGreaterModule(ar)) {
+    while (!(bigrational(b) > ar)) {
         a = b;
         b = std::nextafter(b, INFINITY);
     } // a <= |r| < b
-    const bigrational mid = (bigrational(a) + bigrational(b)) * bigrational(0.5);
+    // Compare 2|r| with a+b instead of |r| with the midpoint: no division.
+    const bigrational twice = ar + ar, sum = bigrational(a) + bigrational(b);
     double n;
-    if (ar.hasGreaterModule(mid))
+    if (twice > sum)
         n = b;
-    else if (mid.hasGreaterModule(ar))
+    else if (sum > twice)
         n = a;
     else { // a tie: the one with an even last mantissa bit
         uint64_t bits;
         std::memcpy(&bits, &a, sizeof(bits));
         n = (bits & 1) ? b : a;
     }
-    return r.sgn() > 0 ? n : -n;
+    return negative ? -n : n;
 }
 
 // Fill a VolumeOutput with the polyhedral cells (tetrahedrize == false) or the tetrahedra
@@ -3983,6 +3991,7 @@ void BSPcomplex::extractVolume(
         });
         out.num_coplanar_groups = (uint32_t)coplanar_group_size.size();
         out.surface_faces = std::move(tet_surface_faces);
+        out.face_provenance = face_provenance;
 
         // Provenance of inserted edges: per input edge the output tet edges tiling it.
         out.edge_provenance.reserve(edge_provenance.size());
