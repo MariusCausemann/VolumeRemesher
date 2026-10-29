@@ -1,7 +1,7 @@
 // Inside/outside classification of the BSP cells with respect to the input surface(s).
 //
 // Two classifiers:
-//  - CellClassifier::WINDING (the default): the winding number of each cell, computed exactly
+//  - CellClassifier::WINDING_NUMBER (the default): the winding number of each cell, computed exactly
 //    on the BSP itself and, for inputs where that is undefined (open or inconsistently oriented
 //    surfaces), the generalized winding number. Only this file and winding_number.cpp, LGPL.
 //  - CellClassifier::GRAPH_CUT: the historical min-cut over the dual graph of the cells

@@ -714,7 +714,7 @@ NB_MODULE(_core, m)
     nb::enum_<CellClassifier>(m, "CellClassifier",
         "How cells are classified inside/outside: WINDING (the winding number; the default) or "
         "GRAPH_CUT (the legacy min-cut, only in builds with VOLUMEREMESHER_WITH_GRAPHCUT).")
-        .value("WINDING", CellClassifier::WINDING)
+        .value("WINDING", CellClassifier::WINDING_NUMBER)
         .value("GRAPH_CUT", CellClassifier::GRAPH_CUT);
     m.def(
         "has_graphcut",
@@ -731,11 +731,11 @@ NB_MODULE(_core, m)
         "make_mesh", &py_make_mesh, "a"_a.none(), "name_a"_a.none(), "opcode"_a, "b"_a.none(),
         "name_b"_a.none(), "edges"_a.none(), "points"_a.none(), "verbose"_a, "logging"_a,
         "triangulate"_a, "export_rational"_a, "fill_holes"_a, "keep_all_cells"_a, "output"_a,
-        "classifier"_a = CellClassifier::WINDING);
+        "classifier"_a = CellClassifier::WINDING_NUMBER);
     m.def(
         "embed_mesh", &py_embed_mesh, "a"_a, "tet_mesh"_a, "opcode"_a, "edges"_a.none(),
         "points"_a.none(), "verbose"_a, "triangulate"_a, "export_rational"_a, "output"_a,
-        "classifier"_a = CellClassifier::WINDING);
+        "classifier"_a = CellClassifier::WINDING_NUMBER);
     m.def(
         "arrange_2d", &py_arrange_2d, "points"_a, "segments"_a, "export_rational"_a, "verbose"_a);
 

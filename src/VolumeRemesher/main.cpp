@@ -43,7 +43,7 @@ static int run(int argc, char** argv)
     bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
     char* edge_file = NULL; // -e: extra edges to insert
     char* point_file = NULL; // -p: extra points to insert
-    CellClassifier classifier = CellClassifier::WINDING; // -c winding|graphcut
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER; // -c winding|graphcut
     char* fileA_name = NULL;
     char* fileB_name = NULL;
     char bool_opcode = '0';
@@ -118,7 +118,7 @@ static int run(int argc, char** argv)
                 if (i + 1 >= argc) ip_error("-c requires a classifier argument\n");
                 const char* name = argv[++i];
                 if (!strcmp(name, "winding"))
-                    classifier = CellClassifier::WINDING;
+                    classifier = CellClassifier::WINDING_NUMBER;
                 else if (!strcmp(name, "graphcut"))
                     classifier = CellClassifier::GRAPH_CUT;
                 else

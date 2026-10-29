@@ -31,11 +31,13 @@
 #define EXTERNAL 0
 
 // How the cells are classified inside/outside the input surface(s), see inOutPartition.cpp.
-//  WINDING   -> winding number: exact on the BSP for closed, consistently oriented input, the
+//  WINDING_NUMBER -> winding number: exact on the BSP for closed, consistently oriented input, the
 //               generalized winding number otherwise. The default.
 //  GRAPH_CUT -> the historical area-weighted min-cut. Available only when the library was built
 //               with VOLUMEREMESHER_WITH_GRAPHCUT (its third-party code is not LGPL compatible).
-enum class CellClassifier : uint8_t { WINDING = 0, GRAPH_CUT = 1 };
+// (WINDING_NUMBER, not WINDING: <wingdi.h> defines WINDING as a macro, and the Python module
+// includes <windows.h>.)
+enum class CellClassifier : uint8_t { WINDING_NUMBER = 0, GRAPH_CUT = 1 };
 
 namespace vol_rem {
 // Returns 1 if point is on the boundary of the triangle, 2 if it is in the interior, 0 otherwise
@@ -478,7 +480,7 @@ public:
     // Interior-exterior constraint surface (inOutPartition.cpp)
     void constraintsSurface_complexPartition(
         bool two_files = false,
-        CellClassifier classifier = CellClassifier::WINDING,
+        CellClassifier classifier = CellClassifier::WINDING_NUMBER,
         bool verbose = false);
     uint32_t cell_vertex_off_face(const BSPface& f, uint64_t cell_ind);
     // Winding-number classifier
@@ -574,7 +576,7 @@ BSPcomplex* makePolyhedralMesh(
     // When present, keep_all_cells is implied so they survive into the tetrahedralization.
     const extra_features_t* extra = nullptr,
     // How cells are classified inside/outside (ignored with keep_all_cells).
-    CellClassifier classifier = CellClassifier::WINDING);
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER);
 
 /// <summary>
 /// Same as above, but file B represents a tetrahedral mesh where A will be embedded
@@ -603,7 +605,7 @@ BSPcomplex* remakePolyhedralMesh(
     // Optional extra edges/points to force into the embedding (see insert_edges_and_points).
     const extra_features_t* extra = nullptr,
     // How cells are classified inside/outside (ignored with no_class).
-    CellClassifier classifier = CellClassifier::WINDING);
+    CellClassifier classifier = CellClassifier::WINDING_NUMBER);
 } // namespace vol_rem
 
 #endif /* BSP_h */

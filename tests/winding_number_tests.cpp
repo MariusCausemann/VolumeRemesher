@@ -199,7 +199,7 @@ TEST_CASE(
           "cube_on_cube.off"}) {
         INFO(name);
         const std::vector<uint32_t> gc = cell_places(name, CellClassifier::GRAPH_CUT);
-        const std::vector<uint32_t> wn = cell_places(name, CellClassifier::WINDING);
+        const std::vector<uint32_t> wn = cell_places(name, CellClassifier::WINDING_NUMBER);
         REQUIRE(gc.size() == wn.size());
         size_t diff = 0;
         for (size_t i = 0; i < gc.size(); i++) diff += gc[i] != wn[i];
