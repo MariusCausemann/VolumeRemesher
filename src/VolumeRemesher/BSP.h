@@ -351,13 +351,9 @@ public:
     // Return the overall number of bytes occupied by the BSP structure
     size_t getStructureSize() const;
 
-    // Complex elements relations
-    inline void assigne_edge_to_face(uint64_t edge, uint64_t face);
-
     // Explore the complex
     // uint32_t getFaceVertex(const BSPface& f, uint32_t v_ind);
     // bool faceHasVertex(const BSPface& f, uint32_t v_ind);
-    uint64_t faceSharedWithCell(uint64_t c1, uint64_t c2);
     uint64_t count_cellEdges(const BSPcell& cell);
     uint32_t count_cellVertices(const BSPcell& cell, uint64_t* num_cellEdges);
     void list_cellEdges(BSPcell& cell, vector<uint64_t>& cell_edges);
@@ -368,7 +364,6 @@ public:
     void list_cellVertices_ts(const BSPcell& cell, vector<uint32_t>& cell_vrts) const;
     void list_faceVertices(BSPface& face, vector<uint32_t>& face_vrts);
     void fill_cell_locDS(BSPcell& cell, vector<uint64_t>& cell_edges, vector<uint32_t>& cell_vrts);
-    inline uint64_t find_face_edge(const BSPface& face, uint32_t v, uint32_t u);
     uint64_t count_cellFaces_inc_cellVrt(const BSPcell& cell, uint32_t v);
     void cell_VFrelation(const BSPcell& cell, uint32_t v, vector<uint64_t>& v_incFaces_ind);
     void

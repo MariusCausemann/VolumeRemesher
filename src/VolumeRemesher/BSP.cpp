@@ -177,40 +177,6 @@ inline void BSPcell::removeFace(uint64_t face_pos)
 // BSPcomplex Methods
 //--------------------
 
-//  Input: the index of a BSPedge: edge,
-//         the index of a BSPface: face.
-// Output: nothing.
-// Note. BSPedge is attached to BSPface and viceversa.
-// Note. this function is used ONLY during the conversion from Delaunay mesh to
-//       BSPcomplex.
-inline void BSPcomplex::assigne_edge_to_face(uint64_t edge, uint64_t face)
-{
-    faces[face].edges.push_back(edge);
-    // edges[edge].conn_faces.push_back(face);
-    edges[edge].conn_face_0 = face;
-}
-
-//  Input: the index of 2 cells w.r.t. the vector cells: c1, c2,
-// Output: the index of the fece, w.r.t. the vector faces, that lies between
-//         the two input-cells.
-// Note. It is assumed that both the input-cells are bounded by the input-face.
-uint64_t BSPcomplex::faceSharedWithCell(uint64_t c1, uint64_t c2)
-{
-    BSPcell& cell1 = cells[c1];
-    for (uint64_t i = 0; i < cell1.faces.size(); i++)
-        if (faces[cell1.faces[i]].conn_cells[0] == c2 || faces[cell1.faces[i]].conn_cells[1] == c2)
-            return cell1.faces[i];
-
-#ifdef DEBUG_BSP
-    printf(
-        "\n[BSP.cpp]BSPcomplex::faceSharedWithCell: ERROR no common face "
-        "between cell #%llu and cell #%llu.\n",
-        c1,
-        c2);
-#endif
-    return UINT64_MAX; // Never reached.
-}
-
 //  Input: a BSPcell: cell.
 // Output: returns the number of edges of the BSPcell.
 uint64_t BSPcomplex::count_cellEdges(const BSPcell& cell)
@@ -363,34 +329,6 @@ void BSPcomplex::fill_cell_locDS(
     // Reset edge_visit and vrts_visit.
     for (uint64_t e = 0; e < cell_edges.size(); e++) edge_visit[cell_edges[e]] = 0;
     for (uint64_t v = 0; v < cell_vrts.size(); v++) vrts_visit[cell_vrts[v]] = 0;
-}
-
-//  Input: a BSPface: face,
-//         indices of two edge endpoints (w.r.t. vector vertices): u, v,
-// Output: if exists returns the index of a BSPedge with endpoints u and v
-//         that belong to faces[face], otherwise return UINT64_MAX.
-inline uint64_t BSPcomplex::find_face_edge(const BSPface& face, uint32_t v, uint32_t u)
-{
-#ifdef DEBUG_BSP
-    if (face.edges.size() == 0) printf("\n[BSP.cpp]find_face_edge: ERROR face have no edges.\n");
-#endif
-
-    uint64_t edge_ind;
-    for (uint64_t e = 0; e < face.edges.size(); e++) {
-        edge_ind = face.edges[e];
-        BSPedge& edge = edges[edge_ind];
-        if (SAME_EDGE_ENDPTS(u, v, edge.vertices[0], edge.vertices[1])) return edge_ind;
-    }
-
-#ifdef DEBUG_BSP
-    printf(
-        "[BSP.cpp]BSPcomplex::find_face_edge: "
-        "WARNING no match for edge <%u,%u> with this face\n",
-        u,
-        v);
-#endif
-
-    return UINT64_MAX; // Never reached if <u,v> belong to the BSPcell.
 }
 
 //
@@ -880,8 +818,6 @@ BSPcomplex::BSPcomplex(
 
     // Creating as many empty cells as the number of non-ghost tet_
     cells.resize(cell_num);
-    edges.reserve(cell_num + mesh->numVertices());
-    faces.reserve(cell_num * 2);
 
 
     // Loading the cells, creating faces and eadges of the BSP:
@@ -935,8 +871,9 @@ BSPcomplex::BSPcomplex(
                 for (uint64_t t : et) {
                     const uint32_t* w = mesh->tet_node.data() + 4 * t;
                     uint32_t i0 = 0, i1 = 0;
-                    while (w[i0] != e0) i0++;
-                    while (w[i1] != e1) i1++;
+                    while (i0 < 4 && w[i0] != e0) i0++;
+                    while (i1 < 4 && w[i1] != e1) i1++;
+                    assert(i0 < 4 && i1 < 4 && "edge endpoints are vertices of every tet on its ring");
                     edge_creator[6 * t + tet_edge_between[i0][i1]] = 8 * tet_ind + j;
                 }
             }
@@ -987,6 +924,7 @@ BSPcomplex::BSPcomplex(
             uint64_t tet_edge[6];
             for (uint32_t j = 0; j < 6; j++) {
                 const uint64_t creator = edge_creator[6 * tet_ind + j];
+                assert(creator != UINT64_MAX && "every tet edge has a creator (the ring minimum)");
                 tet_edge[j] = new_edge_ind(creator >> 3, creator & 7);
                 if ((creator >> 3) == tet_ind) {
                     const uint32_t e0 = v[tet_edge_vrts[j][0]], e1 = v[tet_edge_vrts[j][1]];
