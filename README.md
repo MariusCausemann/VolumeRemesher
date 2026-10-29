@@ -23,6 +23,8 @@ cmake ..
 ```
 This produces a build configuration for your system (a `mesh_generator.sln` on Windows/MSVC, a `Makefile` on Linux/macOS). Build the `mesh_generator` target as usual. The integration tests are built by default (`VOLUMEREMESHER_BUILD_TESTS=ON`) — run them with `ctest`, or configure with `-DVOLUMEREMESHER_BUILD_TESTS=OFF` to skip them. (Some heavy tracking tests only run in a Release build.)
 
+The legacy graph-cut cell classifier (`-c graphcut`, see [Inside/outside classification](#insideoutside-classification)) is not built by default because its third-party code is not LGPL compatible; `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON` compiles it in, and `ctest` then also runs the suite against it.
+
 ## Python
 
 ### Installation
@@ -126,9 +128,9 @@ both.vertices, both.tets                                # numpy arrays, ready fo
 
 | Function | Command line | Returns |
 | --- | --- | --- |
-| `remesh(surface, *, edges, points, tetrahedralize, keep_all_cells, fill_holes, exact, output, verbose, log)` | `mesh_generator A.off [-e] [-p] [-t] [-a] [-f] [-r] [-s\|-b] [-v] [-l]` | `VolumeMesh`, or `SurfaceMesh` for `output="skin"` (`-s`) / `"black_faces"` (`-b`) |
+| `remesh(surface, *, edges, points, tetrahedralize, keep_all_cells, fill_holes, exact, output, classifier, verbose, log)` | `mesh_generator A.off [-e] [-p] [-t] [-a] [-f] [-r] [-s\|-b] [-c] [-v] [-l]` | `VolumeMesh`, or `SurfaceMesh` for `output="skin"` (`-s`) / `"black_faces"` (`-b`) |
 | `boolean(a, b, op, ...)` | `mesh_generator A.off {U\|I\|D} B.off ...` | same |
-| `embed(surface, tet_mesh, *, edges, points, tetrahedralize, exact, output, verbose)` | `mesh_generator A.off U B.tet ...` | same |
+| `embed(surface, tet_mesh, *, edges, points, tetrahedralize, exact, output, classifier, verbose)` | `mesh_generator A.off U B.tet ...` | same |
 | `arrange_2d(segments, *, exact, verbose)` | `mesh_generator soup.obj -2d [-r]` | `Arrangement` |
 | `embed_exact(surface, tet_mesh, *, edges, points)` | C++ `embed_tri_in_poly_mesh` | `PolyhedralEmbedding`: exact vertices, polyhedral facets and cells, tets, full provenance |
 | `arrange_2d_exact(segments)` | C++ `embed_seg_in_tri_mesh` | `SegmentEmbedding`: exact vertices, triangles, provenance |
@@ -163,12 +165,22 @@ The three inputs — the surface `inputfile_A.off`, the `-e` edges and the `-p` 
 | `-b` | Save the subdivided input constraints ("black faces") to `black_faces.off`. |
 | `-t` | Tetrahedralize the output: write a tet mesh to `volume.tet` (instead of the default polyhedral `volume.msh`). |
 | `-r` | With `-t`, also write exact **rational** vertex coordinates to `volume.tet.rational`. |
-| `-a` | Keep **all** cells: skip the inside/outside min-cut classification and tetrahedralize the whole domain. This makes the `-t` tracking **exact** (no cell is deleted, so every input primitive is realized in the output). Recommended whenever you use the tracking output. |
-| `-f` | Fill holes: cap open boundaries with ear-clipped triangles before meshing (off by default; only affects the solid-output min-cut path — `-a` needs no capping). |
+| `-a` | Keep **all** cells: skip the inside/outside classification and tetrahedralize the whole domain. This makes the `-t` tracking **exact** (no cell is deleted, so every input primitive is realized in the output). Recommended whenever you use the tracking output. |
+| `-f` | Fill holes: cap open boundaries with ear-clipped triangles before meshing (off by default; only affects the solid-output path — `-a` needs no capping). With the caps the input is closed, so the classification uses the exact winding number. |
+| `-c winding\|graphcut` | How cells are classified inside/outside, see [below](#insideoutside-classification). Default `winding`; `graphcut` only in builds configured with `VOLUMEREMESHER_WITH_GRAPHCUT`. |
 | `-2d` | **2D mode**: read an OBJ line soup and write the arrangement of its segments as a triangulation. See [2D mode](#2d-mode). |
 | `-e edges.off` | Also insert these edges into the output (implies `-a`). See [input formats](#input-formats). |
 | `-p points.off` | Also insert these points into the output (implies `-a`). See [input formats](#input-formats). |
 | `bool_opcode` | With two surfaces, combine them with a boolean op: `U` union (A∪B), `I` intersection (A∩B), `D` difference (A\B). |
+
+### Inside/outside classification
+
+Unless `-a` is given, the cells of the arrangement are classified as inside or outside the input surface and only the inside ones are kept (per surface for a boolean, then combined by the opcode). The default classifier, `-c winding`, is the **winding number** of the surface:
+
+* For a closed, consistently oriented input the winding number is computed **exactly** on the arrangement itself: it is constant on every cell, equal across a face that no input triangle covers and changing by the signed number of covering triangles across one that some do, so a walk from the outside assigns it to every cell with exact orientation predicates only. A cell is inside iff its winding number is nonzero (so a self-intersecting input is the union of what its shells enclose). Before the walk the orientation of the triangles is made consistent across manifold edges and each closed component is oriented outward, which changes nothing for a well-formed input and makes the result meaningful for one with flipped faces.
+* For an input that is open or that cannot be oriented consistently (the walk detects this) every cell takes the **generalized winding number** of the surface at a point inside it ([Jacobson et al. 2013](https://igl.ethz.ch/projects/winding-number/), evaluated with the hierarchical expansion of [Barill et al. 2018](https://www.dgp.toronto.edu/projects/fast-winding-numbers/)), and is inside iff that exceeds 1/2 in magnitude, as fTetWild filters its tetrahedra. The evaluation uses only IEEE arithmetic (with a deterministic `atan2`), so the output stays byte-identical across platforms. Capping the input first (`-f`) keeps it on the exact path.
+
+`-c graphcut` is the classifier the tool used before: an area-weighted min-cut over the dual graph of the cells. It gives the same result as the winding number on closed, consistently oriented inputs (the test suite checks this cell by cell) and a different, heuristic closure on open or inconsistently oriented ones. It depends on the GCO and maxflow libraries in `third_party/graph_cut`, whose licenses (research use only; GPL) are not compatible with this library's LGPL, so it is compiled only on request (`-DVOLUMEREMESHER_WITH_GRAPHCUT=ON`) and never shipped in the Python wheels.
 
 ### Input formats
 
@@ -369,7 +381,7 @@ To embed a set of triangles (and, optionally, edges and points) into an existing
 
 ## License
 
-LGPL-3.0-or-later; see [LICENSE](LICENSE). (The default build, `LGPL ON` in CMakeLists.txt, uses only LGPL-compatible components.)
+LGPL-3.0-or-later; see [LICENSE](LICENSE). The default build, the Python wheels and the source distribution contain only LGPL-compatible components. The one exception is opt-in: `third_party/graph_cut` (the legacy `-c graphcut` classifier, see [Inside/outside classification](#insideoutside-classification)) is research-use-only and GPL code that is compiled only with `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON`; a binary built that way must not be distributed under the LGPL.
 
 ## Notes
 

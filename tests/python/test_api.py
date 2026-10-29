@@ -118,6 +118,26 @@ def test_boolean_ops():
         vr.boolean(a, b, "xor")
 
 
+def test_classifier_option():
+    s = model("sphere.off")
+    default = vr.remesh(s, tetrahedralize=True)
+    winding = vr.remesh(s, tetrahedralize=True, classifier="winding")
+    assert np.array_equal(default.tets, winding.tets)
+    with pytest.raises(ValueError):
+        vr.remesh(s, classifier="mincut")
+    if vr.has_graphcut():
+        # A closed, consistently oriented input: both classifiers find the same solid.
+        graphcut = vr.remesh(s, tetrahedralize=True, classifier="graphcut")
+        assert np.array_equal(default.tets, graphcut.tets)
+    else:
+        with pytest.raises(vr.VolumeRemesherError, match="VOLUMEREMESHER_WITH_GRAPHCUT"):
+            vr.remesh(s, classifier="graphcut")
+    # Open input: the generalized winding number still produces a solid (it closes the box).
+    closed = vr.remesh(model("open_box.off"), tetrahedralize=True)
+    everything = vr.remesh(model("open_box.off"), tetrahedralize=True, keep_all_cells=True)
+    assert 0 < len(closed.tets) <= len(everything.tets)
+
+
 def test_embed_into_tet_mesh():
     s = model("Octocat.off")
     m = vr.embed(s, model("Octocat.bg.tet"), tetrahedralize=True)

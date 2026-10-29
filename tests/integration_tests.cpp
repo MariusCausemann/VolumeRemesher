@@ -32,6 +32,12 @@
 
 namespace fs = std::filesystem;
 
+// Flags appended to every mesh_generator run (e.g. "-c graphcut" for the legacy-classifier
+// variant of this suite, see tests/CMakeLists.txt). Empty by default.
+#ifndef VRTEST_EXTRA_FLAGS
+#define VRTEST_EXTRA_FLAGS ""
+#endif
+
 #ifdef _WIN32
 #include <process.h>
 #define VRTEST_GETPID _getpid
@@ -100,7 +106,7 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
     fs::create_directories(work, ec);
 
     const std::string bin = VRTEST_MESH_GENERATOR;
-    const std::string flags = flags_for(mode);
+    const std::string flags = flags_for(mode) + " " + VRTEST_EXTRA_FLAGS;
     std::string cmd;
 #ifdef _WIN32
     cmd = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" " + flags + " > nul 2>&1";
@@ -438,7 +444,9 @@ TEST_CASE("integration: -t all input combinations (surface/edges/points) tracked
     // in a fraction of the time and memory.
     const uint32_t N = 1000;
     const fs::path surface = fs::path(VRTEST_MODELS_DIR) / "cube_subdiv.off";
-    const fs::path dir = fs::temp_directory_path() / "vrcombo_inputs";
+    // Per process (pid): the graph-cut variant of this suite runs the same test concurrently.
+    const fs::path dir =
+        fs::temp_directory_path() / ("vrcombo_inputs_" + std::to_string(VRTEST_GETPID()));
     std::error_code ec;
     fs::create_directories(dir, ec);
     const fs::path edges = dir / "random_edges.off";
@@ -482,7 +490,8 @@ TEST_CASE("integration: -t all edges of a real mesh inserted as edges", "[integr
     if (!fs::exists(model)) {
         WARN("112856simplified.off not present, skipping");
     } else {
-        const fs::path dir = fs::temp_directory_path() / "vredges_real";
+        const fs::path dir =
+            fs::temp_directory_path() / ("vredges_real_" + std::to_string(VRTEST_GETPID()));
         std::error_code ec;
         fs::create_directories(dir, ec);
         const fs::path edges = dir / "all_edges.off";
